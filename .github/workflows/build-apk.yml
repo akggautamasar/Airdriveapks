@@ -67,7 +67,7 @@ jobs:
         working-directory: td-src/example/android
         run: |
           docker buildx build \
-            --build-arg TDLIB_INTERFACE=JAVA \
+            --build-arg TDLIB_INTERFACE=Java \
             --output tdlib \
             .
 
