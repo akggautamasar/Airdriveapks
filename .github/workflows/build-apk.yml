@@ -119,7 +119,7 @@ jobs:
             echo "::error::Could not find a generated org/drinkless/tdlib Java source directory under $ROOT"
             exit 1
           fi
-          PACKAGE_ROOT=$(dirname "$(dirname "$JAVA_SRC_DIR")")  # the directory containing "org"
+          PACKAGE_ROOT=$(dirname "$(dirname "$(dirname "$JAVA_SRC_DIR")")")  # the directory containing "org"
 
           mkdir -p app/src/main/java
           rm -rf app/src/main/java/org
