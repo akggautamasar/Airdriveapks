@@ -121,8 +121,6 @@ class TdClient private constructor(private val appContext: Context) {
     private suspend fun sendMessageWithDocument(localPath: String, chatId: Long, caption: String): TdApi.Message {
         val content = TdApi.InputMessageDocument(
             TdApi.InputFileLocal(localPath),
-            null,
-            false,
             TdApi.FormattedText(caption, emptyArray())
         )
         val sendRequest = TdApi.SendMessage().apply {
