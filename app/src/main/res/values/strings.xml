@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">AirDrive</string>
+    <string name="notif_channel_backup">Backup uploads</string>
+    <string name="notif_channel_backup_desc">Shows progress while AirDrive is uploading your files</string>
+</resources>
