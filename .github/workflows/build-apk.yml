@@ -71,23 +71,48 @@ jobs:
             --output tdlib \
             .
 
+      - name: Inspect TDLib Docker build output
+        run: |
+          echo "Contents of td-src/example/android/tdlib:"
+          find td-src/example/android/tdlib -maxdepth 4 2>&1 | head -200
+
       - name: Vendor TDLib native libraries into app
         run: |
           set -e
-          SRC="td-src/example/android/tdlib"
-          test -d "$SRC/libs" || { echo "::error::TDLib build output missing libs/"; exit 1; }
-          test -d "$SRC/java" || { echo "::error::TDLib build output missing java/ (Java interface)"; exit 1; }
+          ROOT="td-src/example/android/tdlib"
+          test -d "$ROOT" || { echo "::error::TDLib docker output directory '$ROOT' does not exist at all"; exit 1; }
 
+          # Don't assume an exact "libs/java" layout — different TDLib/Docker
+          # versions have organized the output directory slightly differently.
+          # Instead, find the actual files and derive structure from them.
           mkdir -p app/src/main/jniLibs
           rm -rf app/src/main/jniLibs/*
-          cp -r "$SRC/libs/"* app/src/main/jniLibs/
+          SO_COUNT=0
+          while IFS= read -r -d '' so_file; do
+            abi_dir=$(basename "$(dirname "$so_file")")
+            mkdir -p "app/src/main/jniLibs/$abi_dir"
+            cp "$so_file" "app/src/main/jniLibs/$abi_dir/"
+            SO_COUNT=$((SO_COUNT + 1))
+          done < <(find "$ROOT" -name "libtdjson.so" -print0)
+
+          if [ "$SO_COUNT" -eq 0 ]; then
+            echo "::error::No libtdjson.so files found anywhere under $ROOT"
+            exit 1
+          fi
+
+          JAVA_SRC_DIR=$(find "$ROOT" -type d -path "*/org/drinkless/tdlib" | head -n1)
+          if [ -z "$JAVA_SRC_DIR" ]; then
+            echo "::error::Could not find a generated org/drinkless/tdlib Java source directory under $ROOT"
+            exit 1
+          fi
+          PACKAGE_ROOT=$(dirname "$(dirname "$JAVA_SRC_DIR")")  # the directory containing "org"
 
           mkdir -p app/src/main/java
           rm -rf app/src/main/java/org
-          cp -r "$SRC/java/org" app/src/main/java/org
+          cp -r "$PACKAGE_ROOT/org" app/src/main/java/org
 
-          echo "Vendored ABIs:"; ls app/src/main/jniLibs
-          echo "Vendored Java API:"; find app/src/main/java/org -maxdepth 3 -type f -name "*.java"
+          echo "Vendored $SO_COUNT libtdjson.so file(s) across ABIs:"; ls app/src/main/jniLibs
+          echo "Vendored Java API:"; find app/src/main/java/org -maxdepth 4 -type f -name "*.java"
 
       # Secrets cannot be referenced directly inside an `if:` conditional (GitHub
       # rejects the whole workflow file at parse time if you try). So we read the
