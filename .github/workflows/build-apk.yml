@@ -76,11 +76,21 @@ jobs:
           echo "Contents of td-src/example/android/tdlib:"
           find td-src/example/android/tdlib -maxdepth 4 2>&1 | head -200
 
+      - name: Extract TDLib build archive
+        run: |
+          set -e
+          ZIP="td-src/example/android/tdlib/tdlib.zip"
+          test -f "$ZIP" || { echo "::error::$ZIP not found"; exit 1; }
+          mkdir -p td-src/example/android/tdlib/extracted
+          unzip -q -o "$ZIP" -d td-src/example/android/tdlib/extracted
+          echo "Extracted contents:"
+          find td-src/example/android/tdlib/extracted -maxdepth 5 | head -200
+
       - name: Vendor TDLib native libraries into app
         run: |
           set -e
-          ROOT="td-src/example/android/tdlib"
-          test -d "$ROOT" || { echo "::error::TDLib docker output directory '$ROOT' does not exist at all"; exit 1; }
+          ROOT="td-src/example/android/tdlib/extracted"
+          test -d "$ROOT" || { echo "::error::TDLib extracted output directory '$ROOT' does not exist at all"; exit 1; }
 
           # Don't assume an exact "libs/java" layout — different TDLib/Docker
           # versions have organized the output directory slightly differently.
