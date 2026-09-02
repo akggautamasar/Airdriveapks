@@ -6,7 +6,7 @@ on:
       tdlib_ref:
         description: "tdlib/td git ref to build (branch, tag, or commit)"
         required: false
-        default: "master"
+        default: "d1085f9cebc5a62379991ae1652673954f229c1f"
   push:
     branches: [ "main" ]
 
@@ -35,7 +35,7 @@ jobs:
       - name: Resolve tdlib/td commit
         id: tdlib_ref
         run: |
-          REF="${{ github.event.inputs.tdlib_ref || 'master' }}"
+          REF="${{ github.event.inputs.tdlib_ref || 'd1085f9cebc5a62379991ae1652673954f229c1f' }}"
           SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/heads/$REF" | cut -f1)
           if [ -z "$SHA" ]; then
             SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/tags/$REF" | cut -f1)
@@ -59,7 +59,7 @@ jobs:
       - name: Clone tdlib/td
         if: steps.tdlib_cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch "${{ github.event.inputs.tdlib_ref || 'master' }}" \
+          git clone --depth 1 --branch "${{ github.event.inputs.tdlib_ref || 'd1085f9cebc5a62379991ae1652673954f229c1f' }}" \
             https://github.com/tdlib/td.git td-src
 
       - name: Build TDLib for Android via official Docker build
