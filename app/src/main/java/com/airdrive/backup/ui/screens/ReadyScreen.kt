@@ -10,6 +10,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.prefs.DestinationMode
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
@@ -26,6 +27,7 @@ fun ReadyScreen(nav: NavHostController) {
 
     val progress by repository.progress.collectAsState()
     val lastScan by repository.lastScan.collectAsState()
+    val destination by settings.destination.collectAsState(initial = null)
 
     var scanning by remember { mutableStateOf(true) }
     var fileCount by remember { mutableStateOf(0) }
@@ -114,6 +116,41 @@ fun ReadyScreen(nav: NavHostController) {
                 }
 
                 Spacer(Modifier.height(32.dp))
+
+                // Last onboarding decision: without a destination the first backup would queue
+                // thousands of files and upload none of them.
+                if (destination?.needsSetup == true) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(
+                                "Where should backups go?",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Saved Messages needs no setup at all. You can switch to channels " +
+                                    "later without losing anything.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Button(onClick = {
+                                scope.launch {
+                                    settings.setDestinationMode(DestinationMode.SAVED_MESSAGES)
+                                }
+                            }) { Text("Use Saved Messages") }
+                            TextButton(onClick = { nav.navigate(Routes.DESTINATION) }) {
+                                Text("Choose a channel instead")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                }
+
                 Button(
                     onClick = {
                         scope.launch {
@@ -125,6 +162,7 @@ fun ReadyScreen(nav: NavHostController) {
                             }
                         }
                     },
+                    enabled = destination?.needsSetup == false,
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) { Text("Start First Backup") }
                 Spacer(Modifier.height(8.dp))

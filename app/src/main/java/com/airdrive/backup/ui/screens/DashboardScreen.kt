@@ -17,6 +17,8 @@ import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.CategoryTotals
+import com.airdrive.backup.data.prefs.DestinationMode
+import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
@@ -28,6 +30,7 @@ import java.util.*
 fun DashboardScreen(nav: NavHostController) {
     val context = LocalContext.current
     val db = remember { AppDatabase.get(context) }
+    val settings = remember { SettingsStore(context) }
 
     val uploadedCount by db.fileRecordDao().uploadedCountFlow().collectAsState(initial = 0)
     val pendingCount by db.fileRecordDao().pendingCountFlow().collectAsState(initial = 0)
@@ -35,6 +38,7 @@ fun DashboardScreen(nav: NavHostController) {
     val uploadedBytes by db.fileRecordDao().uploadedBytesFlow().collectAsState(initial = 0L)
     val lastBackup by db.fileRecordDao().lastBackupTimeFlow().collectAsState(initial = null)
     val categoryTotals by db.fileRecordDao().categoryTotalsFlow().collectAsState(initial = emptyList())
+    val destination by settings.destination.collectAsState(initial = null)
 
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
@@ -50,6 +54,9 @@ fun DashboardScreen(nav: NavHostController) {
                         Icon(Icons.Default.MoreVert, contentDescription = "Menu")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(text = { Text("Backup destination") }, onClick = {
+                            menuOpen = false; nav.navigate(Routes.DESTINATION)
+                        })
                         DropdownMenuItem(text = { Text("Channel configuration") }, onClick = {
                             menuOpen = false; nav.navigate(Routes.CHANNEL_CONFIG)
                         })
@@ -58,6 +65,9 @@ fun DashboardScreen(nav: NavHostController) {
                         })
                         DropdownMenuItem(text = { Text("Backup settings") }, onClick = {
                             menuOpen = false; nav.navigate(Routes.BACKUP_SETTINGS)
+                        })
+                        DropdownMenuItem(text = { Text("Restore from Telegram") }, onClick = {
+                            menuOpen = false; nav.navigate(Routes.RESTORE)
                         })
                         DropdownMenuItem(text = { Text("Failed uploads") }, onClick = {
                             menuOpen = false; nav.navigate(Routes.FAILED_UPLOADS)
@@ -100,10 +110,38 @@ fun DashboardScreen(nav: NavHostController) {
                 }
             }
 
+            // Uploads cannot start until there is somewhere to put them, and a silent no-op is
+            // exactly the failure people reported before this card existed.
+            if (destination?.needsSetup == true) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("No destination yet", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "Pick Saved Messages for zero setup, or point AirDrive at a channel.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { nav.navigate(Routes.DESTINATION) }) { Text("Choose") }
+                    }
+                }
+            }
+
             Button(
                 onClick = { WorkScheduler.runNow(context); nav.navigate(Routes.BACKUP_PROGRESS) },
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) { Text("BACK UP NOW") }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                destinationSummary(destination?.mode),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             Spacer(Modifier.height(20.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -169,4 +207,11 @@ private fun formatLastBackup(millis: Long?): String {
     if (millis == null) return "Never"
     val fmt = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
     return fmt.format(Date(millis))
+}
+
+private fun destinationSummary(mode: DestinationMode?): String = when (mode) {
+    DestinationMode.SAVED_MESSAGES -> "Uploading to your Telegram Saved Messages"
+    DestinationMode.SINGLE_CHAT -> "Uploading to one channel"
+    DestinationMode.PER_CATEGORY -> "Uploading to a channel per file type"
+    null -> ""
 }

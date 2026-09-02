@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.StorageAccess
@@ -26,14 +27,14 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
 
     val autoBackup by settings.autoBackupEnabled.collectAsState(initial = true)
-    val wifiOnly by settings.wifiOnly.collectAsState(initial = true)
+    val networkPolicy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
     val chargingOnly by settings.chargingOnly.collectAsState(initial = false)
-    val allowMobile by settings.allowMobileData.collectAsState(initial = false)
     val batteryConscious by settings.batteryConscious.collectAsState(initial = true)
     val includeSmall by settings.includeSmallFiles.collectAsState(initial = false)
     val frequency by settings.backupFrequencyHours.collectAsState(initial = 6L)
     val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
     val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
+    val autoRetry by settings.autoRetryFailed.collectAsState(initial = true)
 
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
@@ -59,12 +60,33 @@ fun BackupSettingsScreen(nav: NavHostController) {
             SettingRow("Automatic backup", autoBackup) {
                 scope.launch { settings.setAutoBackupEnabled(it) }; reschedule()
             }
-            SettingRow("Wi-Fi only", wifiOnly) {
-                scope.launch { settings.setWifiOnly(it) }; reschedule()
+
+            // One three-way choice instead of the old "Wi-Fi only" + "Allow mobile data" pair,
+            // which could be switched on together and then contradicted itself.
+            Spacer(Modifier.height(8.dp))
+            Text("Upload over", style = MaterialTheme.typography.titleMedium)
+            Column(Modifier.padding(top = 4.dp)) {
+                NetworkPolicyOption("Wi-Fi only", NetworkPolicy.WIFI_ONLY, networkPolicy) {
+                    scope.launch { settings.setNetworkPolicy(it) }; reschedule()
+                }
+                NetworkPolicyOption(
+                    "Wi-Fi or mobile data, but not roaming",
+                    NetworkPolicy.NOT_ROAMING,
+                    networkPolicy
+                ) {
+                    scope.launch { settings.setNetworkPolicy(it) }; reschedule()
+                }
+                NetworkPolicyOption("Any connection", NetworkPolicy.ANY, networkPolicy) {
+                    scope.launch { settings.setNetworkPolicy(it) }; reschedule()
+                }
             }
-            SettingRow("Allow mobile data", allowMobile) {
-                scope.launch { settings.setAllowMobileData(it) }; reschedule()
-            }
+            Text(
+                "Applies to “Back up now” too, not just scheduled runs.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(8.dp))
             SettingRow("Charging only", chargingOnly) {
                 scope.launch { settings.setChargingOnly(it) }; reschedule()
             }
@@ -73,6 +95,9 @@ fun BackupSettingsScreen(nav: NavHostController) {
             }
             SettingRow("Include files under 1 KB", includeSmall) {
                 scope.launch { settings.setIncludeSmallFiles(it) }
+            }
+            SettingRow("Retry failed files automatically", autoRetry) {
+                scope.launch { settings.setAutoRetryFailed(it) }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -105,11 +130,44 @@ fun BackupSettingsScreen(nav: NavHostController) {
             )
 
             Spacer(Modifier.height(16.dp))
+            Text("More", style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = { nav.navigate(Routes.DESTINATION) }) {
+                Text("Backup destination")
+            }
+            TextButton(onClick = { nav.navigate(Routes.ADVANCED_SETTINGS) }) {
+                Text("Scan rules, captions and export")
+            }
+            TextButton(onClick = { nav.navigate(Routes.RESTORE) }) {
+                Text("Restore files from Telegram")
+            }
+            TextButton(onClick = { nav.navigate(Routes.API_CREDENTIALS) }) {
+                Text("Telegram API keys")
+            }
+
+            Spacer(Modifier.height(16.dp))
             OutlinedButton(
                 onClick = { WorkScheduler.runNow(context) },
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Retry failed uploads on next run") }
+            Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun NetworkPolicyOption(
+    label: String,
+    option: NetworkPolicy,
+    selected: NetworkPolicy,
+    onPick: (NetworkPolicy) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = option == selected, onClick = { onPick(option) })
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge)
     }
 }
 

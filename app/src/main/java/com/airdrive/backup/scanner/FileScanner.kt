@@ -23,7 +23,9 @@ data class ScanProgress(
     val currentDir: String,
     val wholeDevice: Boolean = false,
     /** Whole-device scanning is on but the storage permission is missing. */
-    val accessBlocked: Boolean = false
+    val accessBlocked: Boolean = false,
+    /** Files the user's own rules kept out: excluded folders, or over the size cap. */
+    val filesExcluded: Int = 0
 )
 
 class FileScanner(private val context: Context) {
@@ -62,6 +64,8 @@ class FileScanner(private val context: Context) {
             knownUris = HashSet(dao.allUris()),
             uploadedPrints = HashSet(dao.uploadedFingerprints()),
             wholeDevice = wholeDevice,
+            excluded = settings.excludedPaths.first(),
+            maxSizeBytes = settings.maxFileSizeMb.first().coerceAtLeast(0L) * 1024L * 1024L,
             onProgress = onProgress
         )
 
@@ -79,7 +83,8 @@ class FileScanner(private val context: Context) {
             filesQueued = session.queued,
             currentDir = "",
             wholeDevice = wholeDevice,
-            accessBlocked = requestWholeDevice && !hasAccess
+            accessBlocked = requestWholeDevice && !hasAccess,
+            filesExcluded = session.excludedCount
         )
     }
 
@@ -104,7 +109,10 @@ class FileScanner(private val context: Context) {
 
             for (child in children) {
                 if (child.isDirectory) {
-                    if (!Categorizer.isSkippedDir(child.name, child.absolutePath.lowercase())) {
+                    val childPath = child.absolutePath.lowercase()
+                    if (!Categorizer.isSkippedDir(child.name, childPath) &&
+                        !session.isExcluded(childPath)
+                    ) {
                         stack.addLast(child)
                     }
                     continue
@@ -167,7 +175,7 @@ class FileScanner(private val context: Context) {
                     val pathLower = "$pathSoFar/$name".lowercase()
 
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                        if (!Categorizer.isSkippedDir(name, pathLower)) {
+                        if (!Categorizer.isSkippedDir(name, pathLower) && !session.isExcluded(pathLower)) {
                             stack.addLast(
                                 DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId) to
                                     "$pathSoFar/$name"
@@ -202,15 +210,23 @@ class FileScanner(private val context: Context) {
         val knownUris: MutableSet<String>,
         val uploadedPrints: Set<String>,
         val wholeDevice: Boolean,
+        /** Lower-case path fragments the user excluded; matched anywhere in the path. */
+        val excluded: Set<String>,
+        /** 0 = no cap. */
+        val maxSizeBytes: Long,
         val onProgress: (ScanProgress) -> Unit
     ) {
         var scanned = 0
         var queued = 0
+        var excludedCount = 0
         private val batch = ArrayList<FileRecord>(INSERT_BATCH)
         private var lastReportAt = 0
 
+        fun isExcluded(pathLower: String): Boolean =
+            excluded.any { it.isNotEmpty() && pathLower.contains(it) }
+
         fun report(dir: String) {
-            onProgress(ScanProgress(scanned, queued, dir, wholeDevice))
+            onProgress(ScanProgress(scanned, queued, dir, wholeDevice, filesExcluded = excludedCount))
             lastReportAt = scanned
         }
 
@@ -226,6 +242,16 @@ class FileScanner(private val context: Context) {
             if (scanned - lastReportAt >= 250) report(pathLower.substringBeforeLast('/', pathLower))
             if (uri in knownUris) return
             if (!includeSmall && size < MIN_SIZE_BYTES) return
+            if (isExcluded(pathLower)) {
+                excludedCount++
+                return
+            }
+            // Telegram itself refuses anything over 4GB, so queueing such a file only produces a
+            // long upload that is guaranteed to fail.
+            if (size > TELEGRAM_MAX_BYTES || (maxSizeBytes > 0L && size > maxSizeBytes)) {
+                excludedCount++
+                return
+            }
 
             val category = Categorizer.categorize(name.lowercase(), pathLower)
             if (category !in enabled) return
@@ -264,5 +290,8 @@ class FileScanner(private val context: Context) {
     private companion object {
         const val INSERT_BATCH = 200
         const val MIN_SIZE_BYTES = 1024L
+
+        /** Telegram's own per-file ceiling (4GB for Premium, 2GB otherwise). */
+        const val TELEGRAM_MAX_BYTES = 4L * 1024L * 1024L * 1024L
     }
 }

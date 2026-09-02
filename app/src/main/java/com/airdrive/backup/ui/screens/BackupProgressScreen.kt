@@ -10,6 +10,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.db.AppDatabase
+import com.airdrive.backup.data.prefs.NetworkPolicy
+import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupPhase
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
@@ -21,7 +24,12 @@ fun BackupProgressScreen(nav: NavHostController) {
     // get(), not the constructor: the worker writes to the singleton's StateFlow, and a second
     // instance is exactly why this screen used to sit at "0 / 0 files" during a live backup.
     val repository = remember { BackupRepository.get(context) }
+    val settings = remember { SettingsStore(context) }
+    val dao = remember { AppDatabase.get(context).fileRecordDao() }
     val progress by repository.progress.collectAsState()
+    val pending by dao.pendingCountFlow().collectAsState(initial = 0)
+    val networkPolicy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
+    val chargingOnly by settings.chargingOnly.collectAsState(initial = false)
 
     val scanning = progress.phase == BackupPhase.SCANNING
     val percent = progress.percent
@@ -46,8 +54,10 @@ fun BackupProgressScreen(nav: NavHostController) {
             if (scanning) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(10.dp))
             } else {
+                // fraction, not percent/100: a 4 GB video moves the bar smoothly instead of in
+                // 1% steps, and the two numbers can never disagree.
                 LinearProgressIndicator(
-                    progress = { percent / 100f },
+                    progress = { progress.fraction },
                     modifier = Modifier.fillMaxWidth().height(10.dp)
                 )
                 Spacer(Modifier.height(8.dp))
@@ -71,6 +81,18 @@ fun BackupProgressScreen(nav: NavHostController) {
             progress.statusText?.let {
                 Spacer(Modifier.height(12.dp))
                 Text(it, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // Nothing running but files still queued is the most confusing state in the app —
+            // spell out what the run is waiting for instead of looking stuck.
+            if (!progress.isRunning && pending > 0) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "$pending file(s) still queued. Runs wait for " +
+                        waitingFor(networkPolicy, chargingOnly) + ".",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             progress.currentFileName?.let { name ->
@@ -139,4 +161,14 @@ private fun formatEta(seconds: Long): String {
         m > 0 -> "${m}m ${s}s"
         else -> "${s}s"
     }
+}
+
+/** Plain-English version of the WorkManager constraints, for the "still queued" hint. */
+private fun waitingFor(policy: NetworkPolicy, chargingOnly: Boolean): String {
+    val network = when (policy) {
+        NetworkPolicy.WIFI_ONLY -> "Wi-Fi"
+        NetworkPolicy.NOT_ROAMING -> "a connection that is not roaming"
+        NetworkPolicy.ANY -> "any connection"
+    }
+    return if (chargingOnly) "$network and a charger" else network
 }

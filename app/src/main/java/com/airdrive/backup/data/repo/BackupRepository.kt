@@ -2,16 +2,21 @@ package com.airdrive.backup.data.repo
 
 import android.content.Context
 import android.net.Uri
+import android.os.Environment
 import android.text.format.DateFormat
 import android.util.Log
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.FileRecord
 import com.airdrive.backup.data.db.UploadStatus
+import com.airdrive.backup.data.prefs.DestinationConfig
+import com.airdrive.backup.data.prefs.DestinationMode
 import com.airdrive.backup.data.prefs.SettingsStore
+import com.airdrive.backup.data.prefs.UploadOrder
 import com.airdrive.backup.scanner.FileScanner
 import com.airdrive.backup.scanner.ScanProgress
 import com.airdrive.backup.telegram.ChannelCheck
+import com.airdrive.backup.telegram.ResolvedChat
 import com.airdrive.backup.telegram.TdClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +51,14 @@ data class UploadProgress(
     /** Completed bytes plus however much of the in-flight file Telegram has taken. */
     val effectiveBytes: Long get() = bytesUploaded + currentFileUploadedBytes
 
+    /**
+     * 0f..1f for the progress bar. Fractional on purpose: with one 900MB file in the queue the
+     * integer percent below only moves nine times, so the bar looked frozen.
+     */
+    val fraction: Float
+        get() = if (totalBytesQueued <= 0L) 0f
+        else (effectiveBytes.toDouble() / totalBytesQueued.toDouble()).toFloat().coerceIn(0f, 1f)
+
     val percent: Int
         get() = if (totalBytesQueued <= 0L) 0
         else ((effectiveBytes * 100) / totalBytesQueued).toInt().coerceIn(0, 100)
@@ -53,6 +66,21 @@ data class UploadProgress(
     val etaSeconds: Long
         get() = if (bytesPerSecond <= 0L) 0L
         else (totalBytesQueued - effectiveBytes).coerceAtLeast(0L) / bytesPerSecond
+}
+
+/** State of a single restore (Telegram → Downloads/AirDrive), shown by the Restore screen. */
+data class RestoreState(
+    val fileName: String,
+    val doneBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val finishedPath: String? = null,
+    val error: String? = null
+) {
+    val running: Boolean get() = finishedPath == null && error == null
+
+    val fraction: Float
+        get() = if (totalBytes <= 0L) 0f
+        else (doneBytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
 }
 
 /**
@@ -74,6 +102,9 @@ class BackupRepository private constructor(private val context: Context) {
     private val _lastScan = MutableStateFlow<ScanProgress?>(null)
     val lastScan: StateFlow<ScanProgress?> = _lastScan
 
+    private val _restoreState = MutableStateFlow<RestoreState?>(null)
+    val restoreState: StateFlow<RestoreState?> = _restoreState
+
     /** Only one queue run at a time, no matter how many times BACK UP NOW is tapped. */
     private val queueMutex = Mutex()
 
@@ -83,6 +114,18 @@ class BackupRepository private constructor(private val context: Context) {
 
     init {
         tdClient.onUploadProgress = { path, uploaded, total -> onFileProgress(path, uploaded, total) }
+        // Only one restore runs at a time, so the file id can be ignored — whatever TDLib is
+        // downloading is the file the Restore screen is waiting for.
+        tdClient.onDownloadProgress = { _, done, total ->
+            _restoreState.value?.let { current ->
+                if (current.running) {
+                    _restoreState.value = current.copy(
+                        doneBytes = done,
+                        totalBytes = if (total > 0L) total else current.totalBytes
+                    )
+                }
+            }
+        }
     }
 
     private fun onFileProgress(path: String, uploaded: Long, total: Long) {
@@ -135,14 +178,16 @@ class BackupRepository private constructor(private val context: Context) {
         }
         _lastScan.value = result
         _progress.value = _progress.value.copy(
-            statusText = if (result.accessBlocked) {
-                "Grant “All files access” to back up every folder"
-            } else {
-                "Found ${result.filesQueued} new file(s)"
+            statusText = when {
+                result.accessBlocked -> "Grant “All files access” to back up every folder"
+                result.filesExcluded > 0 ->
+                    "Found ${result.filesQueued} new file(s) • ${result.filesExcluded} skipped by your rules"
+                else -> "Found ${result.filesQueued} new file(s)"
             }
         )
         Log.i(tag, "scan finished: scanned=${result.filesScanned} queued=${result.filesQueued} " +
-            "wholeDevice=${result.wholeDevice} blocked=${result.accessBlocked}")
+            "excluded=${result.filesExcluded} wholeDevice=${result.wholeDevice} " +
+            "blocked=${result.accessBlocked}")
         result
     }
 
@@ -160,7 +205,26 @@ class BackupRepository private constructor(private val context: Context) {
                 val revived = dao.resetInFlight()
                 if (revived > 0) Log.i(tag, "reset $revived stuck UPLOADING record(s)")
 
-                val channels = settings.allChannels.first().perCategory
+                val dest = settings.destination.first()
+                if (dest.needsSetup) {
+                    _progress.value = UploadProgress(
+                        phase = BackupPhase.FINISHED,
+                        isRunning = false,
+                        statusText = "Choose where backups should go first"
+                    )
+                    return@withLock
+                }
+
+                // Give earlier failures another go before the run — a flaky network or an
+                // expired session strands files that are otherwise perfectly uploadable. Bounded
+                // by retryCount so a genuinely broken file is not retried forever.
+                if (settings.autoRetryFailed.first()) {
+                    val requeued = dao.retryFailedUnder(MAX_AUTO_RETRIES)
+                    if (requeued > 0) Log.i(tag, "auto-retrying $requeued previously failed file(s)")
+                }
+
+                val order = settings.uploadOrder.first()
+                val template = settings.captionTemplate.first()
                 val total = dao.pendingCount()
                 val totalBytes = dao.pendingBytes()
 
@@ -178,12 +242,12 @@ class BackupRepository private constructor(private val context: Context) {
                 val attempted = HashSet<Long>()
 
                 while (currentCoroutineContext().isActive) {
-                    val batch = dao.nextPendingBatch(BATCH_SIZE).filter { attempted.add(it.id) }
+                    val batch = nextBatch(order).filter { attempted.add(it.id) }
                     if (batch.isEmpty()) break
 
                     for (record in batch) {
                         if (!currentCoroutineContext().isActive) break
-                        val ok = uploadOne(record, channels)
+                        val ok = uploadOne(record, dest, template)
                         if (ok) bytesDone += record.sizeBytes else failed++
                         done++
                         _progress.value = _progress.value.copy(
@@ -208,11 +272,31 @@ class BackupRepository private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun uploadOne(record: FileRecord, channels: Map<BackupCategory, Long>): Boolean {
-        // Read the channel from settings, not from the row: the row was written when the file was
-        // first seen, so edits in Channel Configuration would otherwise never reach queued files.
-        val channelId = channels[record.category] ?: record.destinationChannelId
+    /** Drains whichever end of the queue the user asked for. */
+    private suspend fun nextBatch(order: UploadOrder): List<FileRecord> = when (order) {
+        UploadOrder.OLDEST_FIRST -> dao.nextPendingBatch(BATCH_SIZE)
+        UploadOrder.NEWEST_FIRST -> dao.nextPendingNewest(BATCH_SIZE)
+        UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallest(BATCH_SIZE)
+    }
 
+    /**
+     * Where this file goes. Read from settings on every run rather than from the row, so changing
+     * the destination also moves files that are already queued. Saved Messages is resolved through
+     * TDLib and cached there for the rest of the session.
+     */
+    private suspend fun resolveDestination(record: FileRecord, dest: DestinationConfig): Long =
+        when (dest.mode) {
+            DestinationMode.SAVED_MESSAGES -> tdClient.savedMessagesChatId()
+            DestinationMode.SINGLE_CHAT -> dest.singleChatId
+            DestinationMode.PER_CATEGORY ->
+                dest.perCategory[record.category]?.takeIf { it != 0L } ?: record.destinationChannelId
+        }
+
+    private suspend fun uploadOne(
+        record: FileRecord,
+        dest: DestinationConfig,
+        template: String
+    ): Boolean {
         _progress.value = _progress.value.copy(
             currentFileName = record.displayName,
             currentFileBytes = record.sizeBytes,
@@ -223,16 +307,19 @@ class BackupRepository private constructor(private val context: Context) {
 
         var source: UploadSource? = null
         return try {
+            val chatId = resolveDestination(record, dest)
             source = resolveSource(record)
             activeUploadPath = source.path
             resetSpeedSample()
             val messageId = tdClient.uploadFile(
                 localPath = source.path,
-                chatId = channelId,
-                caption = buildCaption(record),
+                chatId = chatId,
+                caption = applyTemplate(template, record),
                 sizeBytes = record.sizeBytes
             )
-            dao.markUploaded(record.id, messageId, System.currentTimeMillis())
+            // The chat is recorded alongside the message: restore needs the pair, and the chat
+            // that actually received the file is not necessarily the category's channel any more.
+            dao.markUploaded(record.id, messageId, chatId, System.currentTimeMillis())
             true
         } catch (e: CancellationException) {
             // Paused or the worker was stopped: put the file back so the next run picks it up.
@@ -285,15 +372,36 @@ class BackupRepository private constructor(private val context: Context) {
 
     private fun sanitize(name: String) = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
-    private fun buildCaption(record: FileRecord): String {
-        val date = DateFormat.format("dd-MM-yyyy HH:mm", Date(record.modifiedAtMillis))
-        val sizeMb = String.format(Locale.US, "%.2f", record.sizeBytes / 1024.0 / 1024.0)
-        val folder = Uri.parse(record.uri).path
-            ?.substringBeforeLast('/', "")
-            ?.removePrefix("/storage/emulated/0")
-            ?.takeIf { it.isNotBlank() }
-        val where = if (folder != null) "\n📁 $folder" else ""
-        return "📄 ${record.displayName}\n📅 $date\n💾 ${sizeMb}MB$where"
+    /**
+     * Fills the user's caption template. Supported placeholders: {name} {date} {size} {folder}
+     * {path} {category} {ext}. A line whose placeholders all came back empty is dropped, so a
+     * template can carry decoration like "📁 {folder}" without leaving a bare emoji behind for
+     * files whose folder is unknown.
+     */
+    private fun applyTemplate(template: String, record: FileRecord): String {
+        val path = Uri.parse(record.uri).path.orEmpty()
+        val folder = path.substringBeforeLast('/', "").removePrefix(PRIMARY_STORAGE)
+        val date = DateFormat.format("dd-MM-yyyy HH:mm", Date(record.modifiedAtMillis)).toString()
+        val filled = template
+            .replace("{name}", record.displayName)
+            .replace("{date}", date)
+            .replace("{size}", formatSize(record.sizeBytes))
+            .replace("{folder}", folder)
+            .replace("{path}", path)
+            .replace("{category}", record.category.name.lowercase().replace('_', ' '))
+            .replace("{ext}", record.displayName.substringAfterLast('.', ""))
+        return filled.lines()
+            .filter { line -> line.isEmpty() || line.any { it.isLetterOrDigit() } }
+            .joinToString("\n")
+            .trim()
+            .take(1024)
+    }
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes >= 1L shl 30 -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+        bytes >= 1L shl 20 -> String.format(Locale.US, "%.2f MB", bytes / 1024.0 / 1024.0)
+        bytes >= 1024L -> String.format(Locale.US, "%.0f KB", bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     /** Makes sure Telegram is usable before a run, and that the chat list is loaded. */
@@ -315,6 +423,48 @@ class BackupRepository private constructor(private val context: Context) {
         }
     }
 
+    /** Probes whichever destination is actually configured, whatever the mode. */
+    suspend fun testDestination(): ChannelCheck {
+        if (!tdClient.awaitReady(20_000)) return ChannelCheck.Failed("Not signed in to Telegram yet")
+        val dest = settings.destination.first()
+        return when (dest.mode) {
+            DestinationMode.SAVED_MESSAGES -> runCatching { tdClient.savedMessagesChatId() }.fold(
+                onSuccess = { ChannelCheck.Ok("Saved Messages") },
+                onFailure = { ChannelCheck.Failed(it.message ?: it.javaClass.simpleName) }
+            )
+            DestinationMode.SINGLE_CHAT -> {
+                tdClient.ensureChatListLoaded()
+                tdClient.checkChannel(dest.singleChatId)
+            }
+            DestinationMode.PER_CATEGORY -> {
+                val results = testAllChannels()
+                val ok = results.count { it.second is ChannelCheck.Ok }
+                if (ok == results.size) {
+                    ChannelCheck.Ok("All ${results.size} channels reachable")
+                } else {
+                    val firstProblem = results.firstOrNull { it.second is ChannelCheck.Failed }
+                    ChannelCheck.Failed(
+                        "$ok of ${results.size} channels reachable" +
+                            (firstProblem?.let { " — ${it.first.name}: ${(it.second as ChannelCheck.Failed).reason}" } ?: "")
+                    )
+                }
+            }
+        }
+    }
+
+    /** Turns a pasted ID / @username / t.me link into a real chat, signing in first if needed. */
+    suspend fun resolveChatInput(raw: String): ResolvedChat {
+        if (!tdClient.awaitReady(20_000)) throw IllegalStateException("Not signed in to Telegram yet")
+        tdClient.ensureChatListLoaded()
+        return tdClient.resolveChatInput(raw)
+    }
+
+    /** Creates a private channel for the signed-in account and returns it. */
+    suspend fun createChannel(title: String): ResolvedChat {
+        if (!tdClient.awaitReady(20_000)) throw IllegalStateException("Not signed in to Telegram yet")
+        return tdClient.createChannel(title)
+    }
+
     /** Points already-queued rows of [category] at a newly saved channel id. */
     suspend fun repointCategory(category: BackupCategory, channelId: Long) =
         dao.repointCategory(category, channelId)
@@ -325,8 +475,132 @@ class BackupRepository private constructor(private val context: Context) {
 
     suspend fun retryOne(id: Long) = dao.retryOne(id)
 
+    // ------------------------------------------------------------------ restore
+
+    /**
+     * Pulls [record] back out of Telegram into Downloads/AirDrive/. TDLib downloads into its own
+     * cache, so the bytes are copied out rather than moved — moving would leave TDLib's file
+     * database pointing at nothing. Progress is published on [restoreState].
+     */
+    suspend fun restoreFile(record: FileRecord): File = withContext(Dispatchers.IO) {
+        val messageId = record.telegramMessageId
+            ?: throw IllegalStateException("No Telegram message was recorded for this file")
+        val chatId = record.destinationChannelId.takeIf { it != 0L }
+            ?: throw IllegalStateException("No Telegram chat was recorded for this file")
+
+        _restoreState.value = RestoreState(record.displayName, totalBytes = record.sizeBytes)
+        try {
+            if (!tdClient.awaitReady(30_000)) throw IllegalStateException("Not signed in to Telegram")
+            val fetched = tdClient.downloadMessageFile(chatId, messageId)
+            val target = uniqueFile(restoreDir(), record.displayName.ifBlank { fetched.fileName })
+            File(fetched.path).inputStream().use { input ->
+                target.outputStream().use { output -> input.copyTo(output, bufferSize = 1 shl 20) }
+            }
+            _restoreState.value = RestoreState(
+                fileName = record.displayName,
+                doneBytes = target.length(),
+                totalBytes = target.length(),
+                finishedPath = target.absolutePath
+            )
+            Log.i(tag, "restored ${record.displayName} to ${target.absolutePath}")
+            target
+        } catch (e: CancellationException) {
+            _restoreState.value = null
+            throw e
+        } catch (e: Exception) {
+            _restoreState.value = RestoreState(
+                fileName = record.displayName,
+                error = e.message?.take(300) ?: e.javaClass.simpleName
+            )
+            throw e
+        }
+    }
+
+    fun clearRestoreState() {
+        _restoreState.value = null
+    }
+
+    fun restorableFlow(query: String, limit: Int = 200) = dao.restorableFlow(query, limit)
+
+    // ------------------------------------------------------------------ export
+
+    /**
+     * Writes a CSV of everything uploaded, so the backup is still findable if the app or the phone
+     * is gone: each row carries the chat and message id the file lives in.
+     */
+    suspend fun exportManifest(): File = withContext(Dispatchers.IO) {
+        val target = uniqueFile(restoreDir(), "airdrive-manifest.csv")
+        target.bufferedWriter().use { out ->
+            out.appendLine("name,category,size_bytes,uploaded_at,chat_id,message_id,source_path")
+            var offset = 0
+            while (true) {
+                val page = dao.uploadedPage(EXPORT_PAGE, offset)
+                if (page.isEmpty()) break
+                for (r in page) {
+                    out.appendLine(
+                        listOf(
+                            r.displayName,
+                            r.category.name,
+                            r.sizeBytes.toString(),
+                            r.uploadedAtMillis?.let { DateFormat.format("yyyy-MM-dd HH:mm", Date(it)).toString() } ?: "",
+                            r.destinationChannelId.toString(),
+                            r.telegramMessageId?.toString() ?: "",
+                            Uri.parse(r.uri).path.orEmpty()
+                        ).joinToString(",") { csvCell(it) }
+                    )
+                }
+                offset += page.size
+            }
+        }
+        Log.i(tag, "manifest written to ${target.absolutePath}")
+        target
+    }
+
+    /** Plain-text copy of the settings, for moving to another phone. */
+    suspend fun exportSettings(): File = withContext(Dispatchers.IO) {
+        val target = uniqueFile(restoreDir(), "airdrive-settings.txt")
+        target.writeText(settings.exportSummary())
+        target
+    }
+
+    private fun csvCell(value: String): String =
+        if (value.any { it == ',' || it == '"' || it == '\n' }) {
+            "\"" + value.replace("\"", "\"\"").replace("\n", " ") + "\""
+        } else {
+            value
+        }
+
+    /** Downloads/AirDrive — a normal folder the user can open in any file manager. */
+    @Suppress("DEPRECATION")
+    private fun restoreDir(): File =
+        File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "AirDrive"
+        ).apply { mkdirs() }
+
+    /** Never overwrites: "report.pdf" becomes "report (1).pdf" if it is already there. */
+    private fun uniqueFile(dir: File, name: String): File {
+        val safe = name.replace(Regex("[/\\\\:*?\"<>|]"), "_").ifBlank { "restored" }
+        val base = safe.substringBeforeLast('.', safe)
+        val ext = safe.substringAfterLast('.', "")
+        var candidate = File(dir, safe)
+        var n = 1
+        while (candidate.exists() && n < 1000) {
+            val suffix = if (ext.isEmpty()) "" else ".$ext"
+            candidate = File(dir, "$base ($n)$suffix")
+            n++
+        }
+        return candidate
+    }
+
     companion object {
         private const val BATCH_SIZE = 50
+        private const val EXPORT_PAGE = 500
+
+        /** How many times a file may fail before automatic retry stops picking it up. */
+        private const val MAX_AUTO_RETRIES = 5
+
+        private const val PRIMARY_STORAGE = "/storage/emulated/0"
 
         @Volatile private var instance: BackupRepository? = null
 

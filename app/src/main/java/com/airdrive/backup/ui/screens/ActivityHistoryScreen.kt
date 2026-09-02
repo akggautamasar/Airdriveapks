@@ -1,12 +1,15 @@
 package com.airdrive.backup.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -17,12 +20,25 @@ import com.airdrive.backup.data.db.UploadStatus
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * Every file AirDrive knows about, searchable and filterable. Filtering happens in SQL rather
+ * than in the list, because a full scan of a phone easily produces tens of thousands of rows.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivityHistoryScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val db = remember { AppDatabase.get(context) }
-    val activity by db.fileRecordDao().recentActivityFlow(200).collectAsState(initial = emptyList())
+    val dao = remember { AppDatabase.get(context).fileRecordDao() }
+
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf<UploadStatus?>(null) }
+
+    val activity by remember(query, filter) {
+        val trimmed = query.trim()
+        val status = filter
+        if (status == null) dao.activityFlow(trimmed, LIMIT)
+        else dao.activityByStatusFlow(status, trimmed, LIMIT)
+    }.collectAsState(initial = emptyList())
 
     Scaffold(
         topBar = {
@@ -36,14 +52,68 @@ fun ActivityHistoryScreen(nav: NavHostController) {
             )
         }
     ) { padding ->
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            items(activity) { record: FileRecord ->
-                ActivityRow(record)
-                Divider()
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Search by file name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = filter == null,
+                    onClick = { filter = null },
+                    label = { Text("All") }
+                )
+                for (status in UploadStatus.values()) {
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(
+                        selected = filter == status,
+                        onClick = { filter = if (filter == status) null else status },
+                        label = { Text(statusLabel(status)) }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            if (activity.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Nothing matches that.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                return@Column
+            }
+
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                items(activity, key = { it.id }) { record: FileRecord ->
+                    ActivityRow(record)
+                    Divider()
+                }
+                if (activity.size >= LIMIT) {
+                    item {
+                        Text(
+                            "Showing the newest $LIMIT — search to narrow it down.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+private const val LIMIT = 300
 
 @Composable
 private fun ActivityRow(record: FileRecord) {
@@ -55,23 +125,40 @@ private fun ActivityRow(record: FileRecord) {
         Column(modifier = Modifier.weight(1f)) {
             Text(record.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
-                fmt.format(Date(record.uploadedAtMillis ?: record.addedAtMillis)),
+                "${formatBytes(record.sizeBytes)} • " +
+                    fmt.format(Date(record.uploadedAtMillis ?: record.addedAtMillis)),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            record.lastError?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2
+                )
+            }
         }
         StatusChip(record.status)
     }
 }
 
+private fun statusLabel(status: UploadStatus): String = when (status) {
+    UploadStatus.UPLOADED -> "Uploaded"
+    UploadStatus.FAILED -> "Failed"
+    UploadStatus.UPLOADING -> "Uploading"
+    UploadStatus.PENDING -> "Pending"
+    UploadStatus.SKIPPED -> "Skipped"
+}
+
 @Composable
 private fun StatusChip(status: UploadStatus) {
-    val (label, color) = when (status) {
-        UploadStatus.UPLOADED -> "Uploaded" to MaterialTheme.colorScheme.primary
-        UploadStatus.FAILED -> "Failed" to MaterialTheme.colorScheme.error
-        UploadStatus.UPLOADING -> "Uploading" to MaterialTheme.colorScheme.tertiary
-        UploadStatus.PENDING -> "Pending" to MaterialTheme.colorScheme.onSurfaceVariant
-        UploadStatus.SKIPPED -> "Skipped" to MaterialTheme.colorScheme.onSurfaceVariant
+    val color = when (status) {
+        UploadStatus.UPLOADED -> MaterialTheme.colorScheme.primary
+        UploadStatus.FAILED -> MaterialTheme.colorScheme.error
+        UploadStatus.UPLOADING -> MaterialTheme.colorScheme.tertiary
+        UploadStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+        UploadStatus.SKIPPED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    AssistChip(onClick = {}, label = { Text(label, color = color) })
+    AssistChip(onClick = {}, label = { Text(statusLabel(status), color = color) })
 }

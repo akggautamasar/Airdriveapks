@@ -42,6 +42,14 @@ interface FileRecordDao {
     @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY addedAtMillis ASC LIMIT :limit")
     suspend fun nextPendingBatch(limit: Int): List<FileRecord>
 
+    /** Newest photos first, which is what people actually want to see land in Telegram first. */
+    @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY modifiedAtMillis DESC LIMIT :limit")
+    suspend fun nextPendingNewest(limit: Int): List<FileRecord>
+
+    /** Clears the file count fastest on a slow connection. */
+    @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY sizeBytes ASC LIMIT :limit")
+    suspend fun nextPendingSmallest(limit: Int): List<FileRecord>
+
     @Query("SELECT * FROM file_records WHERE status = 'FAILED' ORDER BY uploadedAtMillis DESC")
     fun failedFilesFlow(): Flow<List<FileRecord>>
 
@@ -50,6 +58,38 @@ interface FileRecordDao {
 
     @Query("SELECT * FROM file_records ORDER BY addedAtMillis DESC LIMIT :limit")
     fun recentActivityFlow(limit: Int): Flow<List<FileRecord>>
+
+    /**
+     * Activity with an optional name search. An empty [query] matches everything, so one query
+     * serves both the plain list and the search box — filtering 13k rows in the UI is not an
+     * option.
+     */
+    @Query(
+        "SELECT * FROM file_records " +
+        "WHERE (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "ORDER BY addedAtMillis DESC LIMIT :limit"
+    )
+    fun activityFlow(query: String, limit: Int): Flow<List<FileRecord>>
+
+    @Query(
+        "SELECT * FROM file_records " +
+        "WHERE status = :status AND (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "ORDER BY addedAtMillis DESC LIMIT :limit"
+    )
+    fun activityByStatusFlow(status: UploadStatus, query: String, limit: Int): Flow<List<FileRecord>>
+
+    /** Files that can be pulled back out of Telegram: uploaded, and with a message to fetch. */
+    @Query(
+        "SELECT * FROM file_records " +
+        "WHERE status = 'UPLOADED' AND telegramMessageId IS NOT NULL " +
+        "AND (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "ORDER BY uploadedAtMillis DESC LIMIT :limit"
+    )
+    fun restorableFlow(query: String, limit: Int): Flow<List<FileRecord>>
+
+    /** Paged so the CSV export never holds the whole table in memory. */
+    @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' ORDER BY uploadedAtMillis ASC LIMIT :limit OFFSET :offset")
+    suspend fun uploadedPage(limit: Int, offset: Int): List<FileRecord>
 
     @Query("SELECT COUNT(*) FROM file_records WHERE status = 'UPLOADED'")
     fun uploadedCountFlow(): Flow<Int>
@@ -99,14 +139,26 @@ interface FileRecordDao {
     @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM file_records WHERE status = 'PENDING'")
     suspend fun pendingBytes(): Long
 
+    @Query("SELECT COUNT(*) FROM file_records WHERE status = 'FAILED'")
+    suspend fun failedCount(): Int
+
+    @Query("SELECT COUNT(*) FROM file_records WHERE status = 'UPLOADED'")
+    suspend fun uploadedCount(): Int
+
     @Query("UPDATE file_records SET status = :status, lastError = :error WHERE id = :id")
     suspend fun markStatus(id: Long, status: UploadStatus, error: String? = null)
 
+    /**
+     * [chatId] is the chat the bytes actually landed in, which is not necessarily the category's
+     * configured channel any more (Saved Messages and single-chat mode both exist). Restore needs
+     * the pair (chat, message) to find the file again, so it is recorded at the moment of success.
+     */
     @Query(
         "UPDATE file_records SET status = 'UPLOADED', telegramMessageId = :messageId, " +
-        "uploadedAtMillis = :uploadedAt, lastError = NULL WHERE id = :id"
+        "destinationChannelId = :chatId, uploadedAtMillis = :uploadedAt, lastError = NULL " +
+        "WHERE id = :id"
     )
-    suspend fun markUploaded(id: Long, messageId: Long, uploadedAt: Long)
+    suspend fun markUploaded(id: Long, messageId: Long, chatId: Long, uploadedAt: Long)
 
     @Query(
         "UPDATE file_records SET status = 'FAILED', retryCount = retryCount + 1, lastError = :error WHERE id = :id"
@@ -115,6 +167,16 @@ interface FileRecordDao {
 
     @Query("UPDATE file_records SET status = 'PENDING', lastError = NULL WHERE status = 'FAILED'")
     suspend fun retryAllFailed()
+
+    /**
+     * Bounded version used automatically at the start of each run: a file that has already failed
+     * [maxRetries] times is left alone so a genuinely unreadable file cannot churn forever.
+     */
+    @Query(
+        "UPDATE file_records SET status = 'PENDING', lastError = NULL " +
+        "WHERE status = 'FAILED' AND retryCount < :maxRetries"
+    )
+    suspend fun retryFailedUnder(maxRetries: Int): Int
 
     @Query("UPDATE file_records SET status = 'PENDING', lastError = NULL WHERE id = :id")
     suspend fun retryOne(id: Long)

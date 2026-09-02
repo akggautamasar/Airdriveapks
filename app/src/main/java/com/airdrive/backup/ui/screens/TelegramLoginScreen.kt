@@ -24,6 +24,7 @@ fun TelegramLoginScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
 
     val authState by tdClient.authState.collectAsState()
+    val lastAuthError by tdClient.lastAuthError.collectAsState()
     var phone by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -51,6 +52,23 @@ fun TelegramLoginScreen(nav: NavHostController) {
             Spacer(Modifier.height(24.dp))
 
             when (authState) {
+                // TDLib is up but has no usable api_id/api_hash: the only way forward is for the
+                // user to bring their own from my.telegram.org.
+                AuthState.NEEDS_CREDENTIALS -> {
+                    Text(
+                        "AirDrive needs your own Telegram API keys before it can sign in.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    lastAuthError?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { nav.navigate(Routes.API_CREDENTIALS) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Add Telegram API keys") }
+                }
                 AuthState.UNKNOWN -> {
                     Text("Preparing secure connection\u2026", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
