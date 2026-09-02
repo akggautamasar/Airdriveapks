@@ -593,6 +593,22 @@ class TdClient private constructor(private val appContext: Context) {
         return DownloadedFile(path, payload.second, size)
     }
 
+    /**
+     * Pins a message so it survives casual "clear chat" actions and stays easy to find by eye
+     * — Telegram's own closest equivalent to a "do not delete" label. Used only for the backup
+     * manifest; failing to pin (e.g. no pin rights, unlikely in Saved Messages) is non-fatal.
+     */
+    suspend fun pinMessage(chatId: Long, messageId: Long) {
+        send(
+            TdApi.PinChatMessage().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+                disableNotification = true
+                onlyForSelf = false
+            }
+        )
+    }
+
     /** The document/video/audio/photo payload of a message, with the best file name available. */
     private fun fileOf(content: TdApi.MessageContent?): Pair<TdApi.File, String>? = when (content) {
         is TdApi.MessageDocument ->
@@ -609,6 +625,46 @@ class TdClient private constructor(private val appContext: Context) {
         is TdApi.MessagePhoto ->
             content.photo.sizes.maxByOrNull { it.photo.expectedSize }?.let { it.photo to "photo.jpg" }
         else -> null
+    }
+
+    /**
+     * Finds the newest AirDrive backup-data manifest sitting in Saved Messages, purely by
+     * searching for [caption] text — no locally stored message id is needed, so this still
+     * works after a full uninstall/reinstall wiped every local record. Returns null if none
+     * has ever been uploaded from this account.
+     */
+    suspend fun findLatestOwnDocument(caption: String): TdApi.Message? {
+        val chatId = savedMessagesChatId()
+        val found = send(
+            TdApi.SearchChatMessages().apply {
+                this.chatId = chatId
+                query = caption
+                fromMessageId = 0L
+                offset = 0
+                limit = 5
+                filter = TdApi.SearchMessagesFilterDocument()
+            }
+        ) as TdApi.FoundChatMessages
+        // Reverse-chronological already, so the first hit is the newest manifest.
+        return found.messages.firstOrNull()
+    }
+
+    /** Downloads the document attached to [message] (already known, unlike [downloadMessageFile]). */
+    suspend fun downloadFile(message: TdApi.Message): DownloadedFile {
+        val payload = fileOf(message.content) ?: throw TdLibException(404, "That message holds no file")
+        val done = send(
+            TdApi.DownloadFile().apply {
+                fileId = payload.first.id
+                priority = 16
+                offset = 0
+                limit = 0
+                synchronous = true
+            }
+        ) as TdApi.File
+        val path = done.local?.path
+        if (path.isNullOrEmpty()) throw TdLibException(500, "Telegram did not return the file")
+        val size = (if (done.size > 0) done.size else done.expectedSize).toLong()
+        return DownloadedFile(path, payload.second, size)
     }
 
     private suspend fun send(function: TdApi.Function<*>): TdApi.Object =

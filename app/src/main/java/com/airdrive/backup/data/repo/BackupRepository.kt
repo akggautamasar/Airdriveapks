@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Environment
 import android.text.format.DateFormat
 import android.util.Log
+import com.airdrive.backup.data.backup.ManifestSync
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.FileRecord
@@ -19,8 +20,12 @@ import com.airdrive.backup.telegram.ChannelCheck
 import com.airdrive.backup.telegram.ResolvedChat
 import com.airdrive.backup.telegram.TdClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -31,6 +36,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 enum class BackupPhase { IDLE, SCANNING, UPLOADING, FINISHED }
 
@@ -39,6 +45,7 @@ data class UploadProgress(
     val totalFiles: Int = 0,
     val doneFiles: Int = 0,
     val failedFiles: Int = 0,
+    val currentFileId: Long? = null,
     val currentFileName: String? = null,
     val currentFileBytes: Long = 0,
     val currentFileUploadedBytes: Long = 0,
@@ -95,6 +102,7 @@ class BackupRepository private constructor(private val context: Context) {
     private val scanner = FileScanner(context)
     private val settings = SettingsStore(context)
     private val tdClient = TdClient.get(context)
+    private val manifestSync = ManifestSync.get(context)
 
     private val _progress = MutableStateFlow(UploadProgress())
     val progress: StateFlow<UploadProgress> = _progress
@@ -104,6 +112,13 @@ class BackupRepository private constructor(private val context: Context) {
 
     private val _restoreState = MutableStateFlow<RestoreState?>(null)
     val restoreState: StateFlow<RestoreState?> = _restoreState
+
+    /** True while the queue is paused: [runBackupQueue] parks between files until this flips back. */
+    private val _paused = MutableStateFlow(false)
+    val paused: StateFlow<Boolean> = _paused
+
+    /** The currently in-flight upload for each record id, so [cancelUpload] can interrupt just one file. */
+    private val activeUploads = ConcurrentHashMap<Long, Deferred<Boolean>>()
 
     /** Only one queue run at a time, no matter how many times BACK UP NOW is tapped. */
     private val queueMutex = Mutex()
@@ -242,12 +257,40 @@ class BackupRepository private constructor(private val context: Context) {
                 val attempted = HashSet<Long>()
 
                 while (currentCoroutineContext().isActive) {
+                    // Pause parks right here, between files — whatever is already in flight for
+                    // the current file keeps running (it is not cancelled by pausing), but the
+                    // next file will not start until resumed.
+                    while (_paused.value && currentCoroutineContext().isActive) {
+                        delay(400)
+                    }
+                    if (!currentCoroutineContext().isActive) break
+
                     val batch = nextBatch(order).filter { attempted.add(it.id) }
                     if (batch.isEmpty()) break
 
                     for (record in batch) {
                         if (!currentCoroutineContext().isActive) break
-                        val ok = uploadOne(record, dest, template)
+                        while (_paused.value && currentCoroutineContext().isActive) {
+                            delay(400)
+                        }
+                        if (!currentCoroutineContext().isActive) break
+
+                        // Cancelled between being batched and now (e.g. the user cancelled a
+                        // whole page of pending files while an earlier one was still uploading).
+                        val fresh = dao.findByUri(record.uri)
+                        if (fresh == null || fresh.status != UploadStatus.PENDING) continue
+
+                        val ok = coroutineScope {
+                            val deferred = async { uploadOne(record, dest, template) }
+                            activeUploads[record.id] = deferred
+                            try {
+                                deferred.await()
+                            } catch (e: CancellationException) {
+                                false
+                            } finally {
+                                activeUploads.remove(record.id)
+                            }
+                        }
                         if (ok) bytesDone += record.sizeBytes else failed++
                         done++
                         _progress.value = _progress.value.copy(
@@ -257,8 +300,17 @@ class BackupRepository private constructor(private val context: Context) {
                             currentFileUploadedBytes = 0
                         )
                         onEachDone(record, ok)
+
+                        // Checkpointed periodically rather than after every file: a manifest
+                        // upload is itself a Telegram round trip, and doing it 2500 times in a
+                        // row would roughly double the total run time for no real benefit.
+                        if (done % MANIFEST_SYNC_EVERY == 0) {
+                            runCatching { manifestSync.sync() }
+                        }
                     }
                 }
+
+                runCatching { manifestSync.sync() }
 
                 _progress.value = _progress.value.copy(
                     phase = BackupPhase.FINISHED,
@@ -298,6 +350,7 @@ class BackupRepository private constructor(private val context: Context) {
         template: String
     ): Boolean {
         _progress.value = _progress.value.copy(
+            currentFileId = record.id,
             currentFileName = record.displayName,
             currentFileBytes = record.sizeBytes,
             currentFileUploadedBytes = 0,
@@ -475,6 +528,44 @@ class BackupRepository private constructor(private val context: Context) {
 
     suspend fun retryOne(id: Long) = dao.retryOne(id)
 
+    /** Toggled by the Pause/Resume button; the running queue checks this between files. */
+    fun setPaused(v: Boolean) {
+        _paused.value = v
+    }
+
+    /**
+     * Cancels one file. A file still waiting in the queue is simply marked CANCELLED and drops
+     * out of every PENDING query. A file actively uploading has its upload job interrupted —
+     * TDLib itself may finish streaming the bytes it already had in flight, but AirDrive stops
+     * waiting for it and the record goes back to CANCELLED rather than UPLOADED.
+     */
+    suspend fun cancelUpload(id: Long) {
+        activeUploads[id]?.cancel()
+        dao.markCancelled(id)
+    }
+
+    /** Cancels every file still waiting (not yet started); files already uploading finish normally. */
+    suspend fun cancelAllPending(): Int = dao.cancelAllPending()
+
+    suspend fun requeueCancelled(id: Long) = dao.requeueCancelled(id)
+
+    fun cancelledFilesFlow(limit: Int = 500) = dao.cancelledFilesFlow()
+
+    // ------------------------------------------------------------------ manifest (Telegram-backed state)
+
+    /**
+     * Checks Saved Messages for a manifest from a previous install and restores it, but only if
+     * the local DB is empty — i.e. this really is a fresh install, not a normal running app.
+     * Safe to call every time the app starts; it is a no-op after the first successful check.
+     */
+    suspend fun restoreManifestIfFreshInstall() = manifestSync.restoreIfAvailable(force = false)
+
+    /** Explicit "Restore backup data" button in Settings — restores even with existing local rows. */
+    suspend fun restoreManifestForced() = manifestSync.restoreIfAvailable(force = true)
+
+    /** Explicit "Sync backup data now" button in Settings. */
+    suspend fun syncManifestNow(): Boolean = manifestSync.sync()
+
     // ------------------------------------------------------------------ restore
 
     /**
@@ -599,6 +690,9 @@ class BackupRepository private constructor(private val context: Context) {
 
         /** How many times a file may fail before automatic retry stops picking it up. */
         private const val MAX_AUTO_RETRIES = 5
+
+        /** Checkpoint the Telegram-backed manifest every this-many successful/failed files. */
+        private const val MANIFEST_SYNC_EVERY = 100
 
         private const val PRIMARY_STORAGE = "/storage/emulated/0"
 

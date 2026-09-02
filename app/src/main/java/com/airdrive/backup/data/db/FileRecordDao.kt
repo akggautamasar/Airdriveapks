@@ -203,4 +203,45 @@ interface FileRecordDao {
      */
     @Query("DELETE FROM file_records WHERE status != 'UPLOADED' AND uri LIKE 'content://%'")
     suspend fun deleteUnsentSafRows(): Int
+
+    // ------------------------------------------------------------------ cancel / requeue
+
+    /** Marks one file as cancelled by the user. It simply drops out of every PENDING query. */
+    @Query("UPDATE file_records SET status = 'CANCELLED', lastError = NULL WHERE id = :id")
+    suspend fun markCancelled(id: Long)
+
+    @Query("SELECT * FROM file_records WHERE status = 'CANCELLED' ORDER BY addedAtMillis DESC")
+    fun cancelledFilesFlow(): Flow<List<FileRecord>>
+
+    /** Puts a cancelled file back in the queue if the user changes their mind. */
+    @Query("UPDATE file_records SET status = 'PENDING', lastError = NULL WHERE id = :id")
+    suspend fun requeueCancelled(id: Long)
+
+    @Query("UPDATE file_records SET status = 'CANCELLED' WHERE status = 'PENDING'")
+    suspend fun cancelAllPending(): Int
+
+    // ------------------------------------------------------------------ manifest restore
+
+    /**
+     * Everything needed to rebuild the Telegram backup-data manifest: only UPLOADED rows,
+     * fetched a page at a time so a 10k-file library never sits in memory all at once.
+     */
+    @Query(
+        "SELECT * FROM file_records WHERE status = 'UPLOADED' " +
+        "ORDER BY id ASC LIMIT :limit OFFSET :offset"
+    )
+    suspend fun uploadedPageById(limit: Int, offset: Int): List<FileRecord>
+
+    /**
+     * A row restored from the Telegram manifest on a fresh install. [uri] is a synthetic
+     * "restored://<fingerprint>" placeholder — the original SAF/file uri is meaningless after
+     * a reinstall — so it satisfies the unique index without colliding with a real file the
+     * scanner finds later. The scanner's own fingerprint check is what actually prevents the
+     * real file from being queued again once it is rescanned.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertRestored(records: List<FileRecord>): List<Long>
+
+    @Query("SELECT COUNT(*) FROM file_records")
+    suspend fun totalRowCount(): Int
 }

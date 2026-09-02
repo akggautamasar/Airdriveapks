@@ -17,6 +17,8 @@ import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.FileRecord
 import com.airdrive.backup.data.db.UploadStatus
+import com.airdrive.backup.data.repo.BackupRepository
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -29,6 +31,8 @@ import java.util.*
 fun ActivityHistoryScreen(nav: NavHostController) {
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).fileRecordDao() }
+    val repository = remember { BackupRepository.get(context) }
+    val scope = rememberCoroutineScope()
 
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf<UploadStatus?>(null) }
@@ -95,7 +99,7 @@ fun ActivityHistoryScreen(nav: NavHostController) {
 
             LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                 items(activity, key = { it.id }) { record: FileRecord ->
-                    ActivityRow(record)
+                    ActivityRow(record, repository, scope)
                     Divider()
                 }
                 if (activity.size >= LIMIT) {
@@ -116,11 +120,16 @@ fun ActivityHistoryScreen(nav: NavHostController) {
 private const val LIMIT = 300
 
 @Composable
-private fun ActivityRow(record: FileRecord) {
+private fun ActivityRow(
+    record: FileRecord,
+    repository: BackupRepository,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
     val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(record.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
@@ -139,6 +148,21 @@ private fun ActivityRow(record: FileRecord) {
                 )
             }
         }
+        // Cancel is only offered for a file that is still queued or actively uploading — an
+        // already-UPLOADED or FAILED row has nothing left to interrupt.
+        when (record.status) {
+            UploadStatus.PENDING, UploadStatus.UPLOADING -> {
+                TextButton(onClick = { scope.launch { repository.cancelUpload(record.id) } }) {
+                    Text("Cancel")
+                }
+            }
+            UploadStatus.CANCELLED -> {
+                TextButton(onClick = { scope.launch { repository.requeueCancelled(record.id) } }) {
+                    Text("Requeue")
+                }
+            }
+            else -> Unit
+        }
         StatusChip(record.status)
     }
 }
@@ -149,6 +173,7 @@ private fun statusLabel(status: UploadStatus): String = when (status) {
     UploadStatus.UPLOADING -> "Uploading"
     UploadStatus.PENDING -> "Pending"
     UploadStatus.SKIPPED -> "Skipped"
+    UploadStatus.CANCELLED -> "Cancelled"
 }
 
 @Composable
@@ -159,6 +184,7 @@ private fun StatusChip(status: UploadStatus) {
         UploadStatus.UPLOADING -> MaterialTheme.colorScheme.tertiary
         UploadStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
         UploadStatus.SKIPPED -> MaterialTheme.colorScheme.onSurfaceVariant
+        UploadStatus.CANCELLED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     AssistChip(onClick = {}, label = { Text(statusLabel(status), color = color) })
 }

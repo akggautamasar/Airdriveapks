@@ -12,8 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.backup.ManifestSync
 import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
+import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
@@ -24,7 +26,10 @@ import kotlinx.coroutines.launch
 fun BackupSettingsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
+    val repository = remember { BackupRepository.get(context) }
     val scope = rememberCoroutineScope()
+    var manifestStatus by remember { mutableStateOf<String?>(null) }
+    var manifestBusy by remember { mutableStateOf(false) }
 
     val autoBackup by settings.autoBackupEnabled.collectAsState(initial = true)
     val networkPolicy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
@@ -128,6 +133,60 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 valueRange = 1f..24f,
                 steps = 22
             )
+
+            Spacer(Modifier.height(16.dp))
+            Text("Backup data on Telegram", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "AirDrive keeps a list of everything already backed up inside your own Saved " +
+                    "Messages (pinned, marked “DO NOT DELETE”). If you ever reinstall AirDrive, " +
+                    "it reads this back automatically so already-backed-up files are recognised " +
+                    "and skipped instead of re-uploaded.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = {
+                        manifestBusy = true
+                        manifestStatus = null
+                        scope.launch {
+                            val ok = repository.syncManifestNow()
+                            manifestStatus = if (ok) "Synced to Telegram." else "Sync failed — check you're signed in."
+                            manifestBusy = false
+                        }
+                    },
+                    enabled = !manifestBusy,
+                    modifier = Modifier.weight(1f)
+                ) { Text("Sync now") }
+                OutlinedButton(
+                    onClick = {
+                        manifestBusy = true
+                        manifestStatus = null
+                        scope.launch {
+                            manifestStatus = when (val r = repository.restoreManifestForced()) {
+                                is ManifestSync.RestoreResult.Restored ->
+                                    "Restored ${r.fileCount} previously backed-up file(s)."
+                                ManifestSync.RestoreResult.NoManifestFound -> "No backup data found on this account yet."
+                                ManifestSync.RestoreResult.NotSignedIn -> "Not signed in to Telegram yet."
+                                ManifestSync.RestoreResult.NothingToDo -> "Nothing to restore."
+                                is ManifestSync.RestoreResult.Failed -> "Restore failed: ${r.reason}"
+                            }
+                            manifestBusy = false
+                        }
+                    },
+                    enabled = !manifestBusy,
+                    modifier = Modifier.weight(1f)
+                ) { Text("Restore now") }
+            }
+            if (manifestBusy) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            manifestStatus?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall)
+            }
 
             Spacer(Modifier.height(16.dp))
             Text("More", style = MaterialTheme.typography.titleMedium)

@@ -17,6 +17,7 @@ import com.airdrive.backup.data.repo.BackupPhase
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.work.WorkScheduler
+import kotlinx.coroutines.launch
 
 @Composable
 fun BackupProgressScreen(nav: NavHostController) {
@@ -131,14 +132,45 @@ fun BackupProgressScreen(nav: NavHostController) {
 
             Spacer(Modifier.height(32.dp))
 
+            val paused by repository.paused.collectAsState()
+            val scope = rememberCoroutineScope()
+
             if (progress.isRunning) {
-                OutlinedButton(
-                    onClick = { WorkScheduler.pauseManual(context) },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("Pause") }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { repository.setPaused(!paused) },
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text(if (paused) "Resume" else "Pause") }
+
+                    // Only meaningful once a file has actually started (currentFileId is set the
+                    // moment upload begins for that record); disabled otherwise so there is
+                    // nothing confusing to tap while, say, the queue is between batches.
+                    OutlinedButton(
+                        onClick = {
+                            progress.currentFileId?.let { id ->
+                                scope.launch { repository.cancelUpload(id) }
+                            }
+                        },
+                        enabled = progress.currentFileId != null,
+                        modifier = Modifier.weight(1f).height(52.dp)
+                    ) { Text("Cancel this file") }
+                }
+                if (paused) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Paused — the current file finishes, then the queue waits here until you resume.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                TextButton(
+                    onClick = { WorkScheduler.pauseManual(context); repository.setPaused(false) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Stop entirely") }
             } else {
                 Button(
-                    onClick = { WorkScheduler.runNow(context) },
+                    onClick = { repository.setPaused(false); WorkScheduler.runNow(context) },
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) { Text(if (progress.doneFiles > 0) "Run again" else "Back up now") }
             }

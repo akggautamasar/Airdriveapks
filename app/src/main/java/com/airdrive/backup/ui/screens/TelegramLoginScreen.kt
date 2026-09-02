@@ -10,6 +10,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.prefs.SettingsStore
+import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.telegram.AuthState
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.ui.nav.Routes
@@ -34,6 +35,11 @@ fun TelegramLoginScreen(nav: NavHostController) {
     LaunchedEffect(authState) {
         if (authState == AuthState.READY) {
             settings.setTelegramLoggedIn(true)
+            // Fire-and-forget: checks Saved Messages for a manifest from a previous install and,
+            // if the local DB is otherwise empty, restores it (already-backed-up files + old
+            // destination settings). Not awaited — login should not stall on a network round
+            // trip, and it is a no-op the vast majority of the time (a normal, non-fresh install).
+            scope.launch { BackupRepository.get(context).restoreManifestIfFreshInstall() }
             // Onboarding no longer routes through a mandatory folder picker; it asks for storage
             // access instead, and only the first time.
             val target = if (settings.onboardingDone.first()) Routes.DASHBOARD else Routes.STORAGE_ACCESS
