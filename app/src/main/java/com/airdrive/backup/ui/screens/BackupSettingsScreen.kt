@@ -1,6 +1,8 @@
 package com.airdrive.backup.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -11,6 +13,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.prefs.SettingsStore
+import com.airdrive.backup.ui.nav.Routes
+import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
 import kotlinx.coroutines.launch
 
@@ -28,6 +32,11 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val batteryConscious by settings.batteryConscious.collectAsState(initial = true)
     val includeSmall by settings.includeSmallFiles.collectAsState(initial = false)
     val frequency by settings.backupFrequencyHours.collectAsState(initial = 6L)
+    val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
+    val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
+
+    var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
+    OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
 
     fun reschedule() = scope.launch { WorkScheduler.rescheduleAutoBackup(context) }
 
@@ -43,7 +52,10 @@ fun BackupSettingsScreen(nav: NavHostController) {
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
             SettingRow("Automatic backup", autoBackup) {
                 scope.launch { settings.setAutoBackupEnabled(it) }; reschedule()
             }
@@ -61,6 +73,25 @@ fun BackupSettingsScreen(nav: NavHostController) {
             }
             SettingRow("Include files under 1 KB", includeSmall) {
                 scope.launch { settings.setIncludeSmallFiles(it) }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text("Storage", style = MaterialTheme.typography.titleMedium)
+            SettingRow("Scan every folder on the phone", wholeDevice) {
+                scope.launch { settings.setScanWholeDevice(it) }
+            }
+            SettingRow("Include SD card / USB storage", includeSdCard) {
+                scope.launch { settings.setIncludeSdCard(it) }
+            }
+            Text(
+                if (hasAccess) StorageAccess.describeRoots(context, includeSdCard)
+                else "All files access is off, so only hand-picked folders are scanned.",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (hasAccess) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.error
+            )
+            TextButton(onClick = { nav.navigate(Routes.STORAGE_ACCESS) }) {
+                Text("Manage storage access")
             }
 
             Spacer(Modifier.height(16.dp))

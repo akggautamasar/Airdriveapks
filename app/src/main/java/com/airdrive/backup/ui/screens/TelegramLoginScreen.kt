@@ -13,6 +13,7 @@ import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.telegram.AuthState
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.ui.nav.Routes
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @Composable
@@ -32,7 +33,10 @@ fun TelegramLoginScreen(nav: NavHostController) {
     LaunchedEffect(authState) {
         if (authState == AuthState.READY) {
             settings.setTelegramLoggedIn(true)
-            nav.navigate(Routes.FOLDER_SELECT) {
+            // Onboarding no longer routes through a mandatory folder picker; it asks for storage
+            // access instead, and only the first time.
+            val target = if (settings.onboardingDone.first()) Routes.DASHBOARD else Routes.STORAGE_ACCESS
+            nav.navigate(target) {
                 popUpTo(Routes.WELCOME) { inclusive = true }
             }
         }

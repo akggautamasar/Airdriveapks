@@ -9,6 +9,15 @@ import kotlinx.coroutines.flow.Flow
 
 data class CategoryCount(val category: BackupCategory, val count: Int, val bytes: Long)
 
+/** Per-category totals for the Categories screen: everything queued, plus what is already up. */
+data class CategoryTotals(
+    val category: BackupCategory,
+    val total: Int,
+    val totalBytes: Long,
+    val uploaded: Int,
+    val uploadedBytes: Long
+)
+
 @Dao
 interface FileRecordDao {
 
@@ -63,6 +72,33 @@ interface FileRecordDao {
     )
     fun categoryBreakdownFlow(): Flow<List<CategoryCount>>
 
+    /**
+     * The Categories screen used to read categoryBreakdownFlow, which only counts UPLOADED
+     * rows — so it showed 0 files everywhere while the queue was still working through 2500
+     * pending files. This one reports both halves.
+     */
+    @Query(
+        "SELECT category, " +
+        "COUNT(*) as total, " +
+        "COALESCE(SUM(sizeBytes),0) as totalBytes, " +
+        "COALESCE(SUM(CASE WHEN status = 'UPLOADED' THEN 1 ELSE 0 END),0) as uploaded, " +
+        "COALESCE(SUM(CASE WHEN status = 'UPLOADED' THEN sizeBytes ELSE 0 END),0) as uploadedBytes " +
+        "FROM file_records GROUP BY category"
+    )
+    fun categoryTotalsFlow(): Flow<List<CategoryTotals>>
+
+    @Query("SELECT uri FROM file_records")
+    suspend fun allUris(): List<String>
+
+    @Query("SELECT fingerprint FROM file_records WHERE status = 'UPLOADED'")
+    suspend fun uploadedFingerprints(): List<String>
+
+    @Query("SELECT COUNT(*) FROM file_records WHERE status = 'PENDING'")
+    suspend fun pendingCount(): Int
+
+    @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM file_records WHERE status = 'PENDING'")
+    suspend fun pendingBytes(): Long
+
     @Query("UPDATE file_records SET status = :status, lastError = :error WHERE id = :id")
     suspend fun markStatus(id: Long, status: UploadStatus, error: String? = null)
 
@@ -82,4 +118,27 @@ interface FileRecordDao {
 
     @Query("UPDATE file_records SET status = 'PENDING', lastError = NULL WHERE id = :id")
     suspend fun retryOne(id: Long)
+
+    /**
+     * A row left in UPLOADING (process killed mid-upload, or the old code path that never
+     * completed) was invisible to every query and would sit there forever. Called at the start
+     * of each run so those files get another go.
+     */
+    @Query("UPDATE file_records SET status = 'PENDING' WHERE status = 'UPLOADING'")
+    suspend fun resetInFlight(): Int
+
+    /** Keeps queued rows pointing at the channel the user just typed in. */
+    @Query(
+        "UPDATE file_records SET destinationChannelId = :channelId " +
+        "WHERE category = :category AND status != 'UPLOADED'"
+    )
+    suspend fun repointCategory(category: BackupCategory, channelId: Long)
+
+    /**
+     * One-time cleanup when whole-device scanning takes over: the same file would otherwise be
+     * queued twice, once as a content:// SAF document and once as a file:// path. Rows that
+     * already uploaded are kept so their fingerprints still suppress duplicates.
+     */
+    @Query("DELETE FROM file_records WHERE status != 'UPLOADED' AND uri LIKE 'content://%'")
+    suspend fun deleteUnsentSafRows(): Int
 }

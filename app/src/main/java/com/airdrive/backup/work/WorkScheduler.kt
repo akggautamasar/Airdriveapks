@@ -22,9 +22,15 @@ object WorkScheduler {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .build()
+        // REPLACE, not KEEP: with KEEP a finished-but-still-registered run made "Back up now"
+        // silently do nothing, which looked exactly like the app being stuck.
         WorkManager.getInstance(context)
-            .enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.KEEP, request)
+            .enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
     }
+
+    /** Live state of the manual run, so the UI can show whether anything is actually queued. */
+    fun manualWorkInfo(context: Context) =
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkLiveData(MANUAL_WORK_NAME)
 
     fun pauseManual(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(MANUAL_WORK_NAME)

@@ -14,25 +14,20 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
-import com.airdrive.backup.data.db.CategoryCount
-
-private fun categoryLabelFor(c: BackupCategory) = when (c) {
-    BackupCategory.PHOTOS -> "Photos"
-    BackupCategory.VIDEOS -> "Videos"
-    BackupCategory.PDFS -> "PDFs"
-    BackupCategory.WORD_EXCEL -> "Documents"
-    BackupCategory.AUDIO -> "Audio"
-    BackupCategory.CALL_RECORDINGS -> "Call Recordings"
-    BackupCategory.OTHER_FILES -> "Other Files"
-}
+import com.airdrive.backup.data.db.CategoryTotals
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CategoriesStatsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val db = remember { AppDatabase.get(context) }
-    val breakdown by db.fileRecordDao().categoryBreakdownFlow().collectAsState(initial = emptyList())
-    val totalUploaded = breakdown.sumOf { it.count }
+    // categoryTotalsFlow, not categoryBreakdownFlow: the latter counts UPLOADED rows only, which
+    // is why every category read "0 files, 0.0 MB" while thousands of files sat queued.
+    val totals by db.fileRecordDao().categoryTotalsFlow().collectAsState(initial = emptyList())
+    val queuedFiles = totals.sumOf { it.total }
+    val uploadedFiles = totals.sumOf { it.uploaded }
+    val uploadedBytes = totals.sumOf { it.uploadedBytes }
+    val totalBytes = totals.sumOf { it.totalBytes }
 
     Scaffold(
         topBar = {
@@ -47,23 +42,45 @@ fun CategoriesStatsScreen(nav: NavHostController) {
         }
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("All categories", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(6.dp))
+                        Text("$uploadedFiles of $queuedFiles files backed up")
+                        Text(
+                            "${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes)}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
             items(BackupCategory.values().toList()) { category ->
-                val cc: CategoryCount? = breakdown.find { it.category == category }
+                val row: CategoryTotals? = totals.find { it.category == category }
+                val total = row?.total ?: 0
+                val uploaded = row?.uploaded ?: 0
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(categoryLabelFor(category), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text("${cc?.count ?: 0} files")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                categoryLabel(category),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text("$uploaded / $total files")
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            formatBytes(cc?.bytes ?: 0L),
+                            "${formatBytes(row?.uploadedBytes ?: 0L)} of ${formatBytes(row?.totalBytes ?: 0L)}",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        if (totalUploaded > 0 && cc != null) {
+                        if (total > 0) {
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(
-                                progress = { cc.count.toFloat() / totalUploaded },
+                                progress = { uploaded.toFloat() / total.toFloat() },
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

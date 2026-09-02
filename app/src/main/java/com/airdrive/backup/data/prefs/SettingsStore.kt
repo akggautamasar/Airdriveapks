@@ -28,6 +28,16 @@ object Keys {
     val AUTHORIZED_TREE_URIS = stringSetPreferencesKey("authorized_tree_uris")
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     val TELEGRAM_LOGGED_IN = booleanPreferencesKey("telegram_logged_in")
+
+    /** Scan every folder under internal storage instead of user-picked SAF trees. */
+    val SCAN_WHOLE_DEVICE = booleanPreferencesKey("scan_whole_device")
+    val INCLUDE_SD_CARD = booleanPreferencesKey("include_sd_card")
+
+    /**
+     * Set once after whole-device mode takes over, when the leftover SAF-queued rows from the
+     * folder-picking era are dropped so the same file is not queued twice under two URIs.
+     */
+    val SAF_QUEUE_PURGED = booleanPreferencesKey("saf_queue_purged")
 }
 
 /** Default channel IDs mirror the original Python prototype; editable in Settings. */
@@ -66,6 +76,16 @@ class SettingsStore(private val context: Context) {
     val authorizedTreeUris: Flow<Set<String>> =
         context.dataStore.data.map { it[Keys.AUTHORIZED_TREE_URIS] ?: emptySet() }
 
+    /** Default on: AirDrive backs up everything under internal storage with no folder picking. */
+    val scanWholeDevice: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SCAN_WHOLE_DEVICE] ?: true }
+
+    val includeSdCard: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.INCLUDE_SD_CARD] ?: true }
+
+    val safQueuePurged: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.SAF_QUEUE_PURGED] ?: false }
+
     fun channelFor(category: BackupCategory): Flow<Long> =
         context.dataStore.data.map { it[Keys.channelKey(category)] ?: DefaultChannels.map.getValue(category) }
 
@@ -88,6 +108,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setBackupFrequencyHours(v: Long) = context.dataStore.edit { it[Keys.BACKUP_FREQUENCY_HOURS] = v }
     suspend fun setOnboardingDone(v: Boolean) = context.dataStore.edit { it[Keys.ONBOARDING_DONE] = v }
     suspend fun setTelegramLoggedIn(v: Boolean) = context.dataStore.edit { it[Keys.TELEGRAM_LOGGED_IN] = v }
+    suspend fun setScanWholeDevice(v: Boolean) = context.dataStore.edit { it[Keys.SCAN_WHOLE_DEVICE] = v }
+    suspend fun setIncludeSdCard(v: Boolean) = context.dataStore.edit { it[Keys.INCLUDE_SD_CARD] = v }
+    suspend fun setSafQueuePurged(v: Boolean) = context.dataStore.edit { it[Keys.SAF_QUEUE_PURGED] = v }
 
     suspend fun setEnabledCategories(categories: Set<BackupCategory>) {
         context.dataStore.edit { it[Keys.ENABLED_CATEGORIES] = categories.map { c -> c.name }.toSet() }

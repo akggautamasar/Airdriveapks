@@ -16,8 +16,9 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
-import com.airdrive.backup.data.db.CategoryCount
+import com.airdrive.backup.data.db.CategoryTotals
 import com.airdrive.backup.ui.nav.Routes
+import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
 import java.text.SimpleDateFormat
 import java.util.*
@@ -33,7 +34,10 @@ fun DashboardScreen(nav: NavHostController) {
     val failedCount by db.fileRecordDao().failedCountFlow().collectAsState(initial = 0)
     val uploadedBytes by db.fileRecordDao().uploadedBytesFlow().collectAsState(initial = 0L)
     val lastBackup by db.fileRecordDao().lastBackupTimeFlow().collectAsState(initial = null)
-    val categoryBreakdown by db.fileRecordDao().categoryBreakdownFlow().collectAsState(initial = emptyList())
+    val categoryTotals by db.fileRecordDao().categoryTotalsFlow().collectAsState(initial = emptyList())
+
+    var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
+    OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
 
     var menuOpen by remember { mutableStateOf(false) }
 
@@ -48,6 +52,9 @@ fun DashboardScreen(nav: NavHostController) {
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("Channel configuration") }, onClick = {
                             menuOpen = false; nav.navigate(Routes.CHANNEL_CONFIG)
+                        })
+                        DropdownMenuItem(text = { Text("Storage access") }, onClick = {
+                            menuOpen = false; nav.navigate(Routes.STORAGE_ACCESS)
                         })
                         DropdownMenuItem(text = { Text("Backup settings") }, onClick = {
                             menuOpen = false; nav.navigate(Routes.BACKUP_SETTINGS)
@@ -73,6 +80,25 @@ fun DashboardScreen(nav: NavHostController) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(16.dp))
+
+            if (!hasAccess) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("Storage access is off", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "AirDrive can only see folders you picked by hand.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { nav.navigate(Routes.STORAGE_ACCESS) }) { Text("Fix this") }
+                    }
+                }
+            }
 
             Button(
                 onClick = { WorkScheduler.runNow(context); nav.navigate(Routes.BACKUP_PROGRESS) },
@@ -103,12 +129,16 @@ fun DashboardScreen(nav: NavHostController) {
                 columns = GridCells.Fixed(2),
                 modifier = Modifier.weight(1f)
             ) {
-                items(categoryBreakdown) { cc: CategoryCount ->
+                // Every category is listed, whether or not anything has uploaded yet, and the
+                // counts include queued files: an empty grid told the user nothing.
+                items(BackupCategory.values().toList()) { category ->
+                    val row: CategoryTotals? = categoryTotals.find { it.category == category }
                     Card(modifier = Modifier.padding(6.dp).fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text(categoryLabelFor(cc.category), style = MaterialTheme.typography.titleMedium)
+                            Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium)
                             Text(
-                                "${cc.count} files \u2022 ${formatBytes(cc.bytes)}",
+                                "${row?.uploaded ?: 0}/${row?.total ?: 0} files \u2022 " +
+                                    formatBytes(row?.totalBytes ?: 0L),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -133,16 +163,6 @@ private fun StatTile(label: String, value: String, modifier: Modifier = Modifier
             Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-}
-
-private fun categoryLabelFor(c: BackupCategory) = when (c) {
-    BackupCategory.PHOTOS -> "Photos"
-    BackupCategory.VIDEOS -> "Videos"
-    BackupCategory.PDFS -> "PDFs"
-    BackupCategory.WORD_EXCEL -> "Documents"
-    BackupCategory.AUDIO -> "Audio"
-    BackupCategory.CALL_RECORDINGS -> "Call Recordings"
-    BackupCategory.OTHER_FILES -> "Other Files"
 }
 
 private fun formatLastBackup(millis: Long?): String {

@@ -23,6 +23,7 @@ import com.airdrive.backup.ui.screens.*
 object Routes {
     const val WELCOME = "welcome"
     const val TELEGRAM_LOGIN = "telegram_login"
+    const val STORAGE_ACCESS = "storage_access"
     const val FOLDER_SELECT = "folder_select"
     const val READY = "ready"
     const val DASHBOARD = "dashboard"
@@ -71,6 +72,7 @@ fun AppNav() {
     NavHost(navController = navController, startDestination = resolved) {
         composable(Routes.WELCOME) { WelcomeScreen(navController) }
         composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
+        composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController) }
         composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
         composable(Routes.READY) { ReadyScreen(navController) }
         composable(Routes.DASHBOARD) { DashboardScreen(navController) }
