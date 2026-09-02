@@ -59,8 +59,16 @@ jobs:
       - name: Clone tdlib/td
         if: steps.tdlib_cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch "${{ github.event.inputs.tdlib_ref || 'd1085f9cebc5a62379991ae1652673954f229c1f' }}" \
-            https://github.com/tdlib/td.git td-src
+          set -e
+          mkdir td-src && cd td-src
+          git init -q
+          git remote add origin https://github.com/tdlib/td.git
+          # A raw commit SHA can't be shallow-fetched with --branch (that only
+          # works for branch/tag names), so fetch the specific commit directly
+          # and check it out. This works whether tdlib_ref resolved to a SHA
+          # or to a branch/tag name that itself resolved to a SHA.
+          git fetch --depth 1 origin "${{ steps.tdlib_ref.outputs.sha }}"
+          git checkout FETCH_HEAD
 
       - name: Build TDLib for Android via official Docker build
         if: steps.tdlib_cache.outputs.cache-hit != 'true'
