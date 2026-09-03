@@ -1,7 +1,0 @@
-<resources>
-    <string name="app_name">AirDrive</string>
-    <string name="notif_channel_backup">Backup uploads</string>
-    <string name="notif_channel_backup_desc">Shows progress while AirDrive is uploading your files</string>
-    <string name="notif_channel_results">Backup results</string>
-    <string name="notif_channel_results_desc">Tells you what a finished backup actually did, and what failed</string>
-</resources>
