@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Roots the FileProvider is allowed to hand out. Deliberately narrow: only AirDrive's own cache
+  (where TDLib downloads and upload staging live) and the public Downloads/AirDrive folder that
+  restores are written to. Nothing else on the phone is shareable through this provider.
+-->
+<paths>
+    <cache-path
+        name="airdrive_cache"
+        path="." />
+    <external-path
+        name="airdrive_downloads"
+        path="Download/AirDrive/" />
+    <external-files-path
+        name="airdrive_external_files"
+        path="." />
+</paths>

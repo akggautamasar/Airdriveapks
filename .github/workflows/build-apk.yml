@@ -1,0 +1,205 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tdlib_ref:
+        description: "tdlib/td git ref to build (branch, tag, or commit)"
+        required: false
+        default: "d1085f9cebc5a62379991ae1652673954f229c1f"
+  push:
+    branches: [ "main" ]
+
+# Only one run at a time so the TDLib cache is never written concurrently.
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Checkout AirDrive
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Resolve tdlib/td commit
+        id: tdlib_ref
+        run: |
+          REF="${{ github.event.inputs.tdlib_ref || 'd1085f9cebc5a62379991ae1652673954f229c1f' }}"
+          SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/heads/$REF" | cut -f1)
+          if [ -z "$SHA" ]; then
+            SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/tags/$REF" | cut -f1)
+          fi
+          if [ -z "$SHA" ]; then
+            SHA="$REF"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved tdlib/td $REF -> $SHA"
+
+      # TDLib's own Android build (compiling OpenSSL + TDLib native code for every ABI)
+      # is the slow part of this workflow, typically 45-90 minutes on a fresh cache.
+      # Once cached, later runs skip straight to the app build below.
+      - name: Cache built TDLib
+        id: tdlib_cache
+        uses: actions/cache@v4
+        with:
+          path: td-src/example/android/tdlib
+          key: tdlib-android-${{ steps.tdlib_ref.outputs.sha }}
+
+      - name: Clone tdlib/td
+        if: steps.tdlib_cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          mkdir td-src && cd td-src
+          git init -q
+          git remote add origin https://github.com/tdlib/td.git
+          # A raw commit SHA can't be shallow-fetched with --branch (that only
+          # works for branch/tag names), so fetch the specific commit directly
+          # and check it out. This works whether tdlib_ref resolved to a SHA
+          # or to a branch/tag name that itself resolved to a SHA.
+          git fetch --depth 1 origin "${{ steps.tdlib_ref.outputs.sha }}"
+          git checkout FETCH_HEAD
+
+      - name: Build TDLib for Android via official Docker build
+        if: steps.tdlib_cache.outputs.cache-hit != 'true'
+        working-directory: td-src/example/android
+        run: |
+          docker buildx build \
+            --build-arg TDLIB_INTERFACE=Java \
+            --output tdlib \
+            .
+
+      - name: Inspect TDLib Docker build output
+        run: |
+          echo "Contents of td-src/example/android/tdlib:"
+          find td-src/example/android/tdlib -maxdepth 4 2>&1 | head -200
+
+      - name: Extract TDLib build archive
+        run: |
+          set -e
+          ZIP="td-src/example/android/tdlib/tdlib.zip"
+          test -f "$ZIP" || { echo "::error::$ZIP not found"; exit 1; }
+          mkdir -p td-src/example/android/tdlib/extracted
+          unzip -q -o "$ZIP" -d td-src/example/android/tdlib/extracted
+          echo "Extracted contents:"
+          find td-src/example/android/tdlib/extracted -maxdepth 5 | head -200
+
+      - name: Vendor TDLib native libraries into app
+        run: |
+          set -e
+          ROOT="td-src/example/android/tdlib/extracted"
+          test -d "$ROOT" || { echo "::error::TDLib extracted output directory '$ROOT' does not exist at all"; exit 1; }
+
+          # Don't assume an exact "libs/java" layout — different TDLib/Docker
+          # versions have organized the output directory slightly differently.
+          # Instead, find the actual files and derive structure from them.
+          mkdir -p app/src/main/jniLibs
+          rm -rf app/src/main/jniLibs/*
+          SO_COUNT=0
+          # The native library is named libtdjni.so when built with the Java
+          # interface (which is what we requested via TDLIB_INTERFACE=Java).
+          # libtdjson.so is only produced by the JSON interface — checked for
+          # defensively here in case that ever changes upstream.
+          while IFS= read -r -d '' so_file; do
+            abi_dir=$(basename "$(dirname "$so_file")")
+            mkdir -p "app/src/main/jniLibs/$abi_dir"
+            cp "$so_file" "app/src/main/jniLibs/$abi_dir/"
+            SO_COUNT=$((SO_COUNT + 1))
+          done < <(find "$ROOT" \( -name "libtdjni.so" -o -name "libtdjson.so" \) -print0)
+
+          if [ "$SO_COUNT" -eq 0 ]; then
+            echo "::error::No libtdjni.so/libtdjson.so files found anywhere under $ROOT"
+            exit 1
+          fi
+
+          JAVA_SRC_DIR=$(find "$ROOT" -type d -path "*/org/drinkless/tdlib" | head -n1)
+          if [ -z "$JAVA_SRC_DIR" ]; then
+            echo "::error::Could not find a generated org/drinkless/tdlib Java source directory under $ROOT"
+            exit 1
+          fi
+          PACKAGE_ROOT=$(dirname "$(dirname "$(dirname "$JAVA_SRC_DIR")")")  # the directory containing "org"
+
+          mkdir -p app/src/main/java
+          rm -rf app/src/main/java/org
+          cp -r "$PACKAGE_ROOT/org" app/src/main/java/org
+
+          echo "Vendored $SO_COUNT libtdjson.so file(s) across ABIs:"; ls app/src/main/jniLibs
+          echo "Vendored Java API:"; find app/src/main/java/org -maxdepth 4 -type f -name "*.java"
+
+      # Secrets cannot be referenced directly inside an `if:` conditional (GitHub
+      # rejects the whole workflow file at parse time if you try). So we read the
+      # secret inside a normal run step instead and expose a plain step output,
+      # which later `if:` conditions are allowed to branch on.
+      - name: Check whether release signing secrets are configured
+        id: release_signing
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_B64" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle*', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
+
+      - name: Build debug APK
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          ./gradlew assembleDebug \
+            -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
+            -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
+
+      - name: Build signed release APK
+        if: steps.release_signing.outputs.enabled == 'true'
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          echo "$RELEASE_KEYSTORE_B64" | base64 -d > release.keystore
+          export RELEASE_KEYSTORE_PATH="$PWD/release.keystore"
+          ./gradlew assembleRelease \
+            -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
+            -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirDrive-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload release APK
+        if: steps.release_signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirDrive-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
