@@ -3,21 +3,69 @@ package com.airdrive.backup.telegram
 import android.content.Context
 import android.util.Log
 import com.airdrive.backup.BuildConfig
+import com.airdrive.backup.data.prefs.SettingsStore
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
+import java.util.Collections
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 enum class AuthState {
+    /** TDLib is up but has no usable api_id/api_hash, so the user has to supply their own. */
+    NEEDS_CREDENTIALS,
     UNKNOWN, WAIT_PHONE_NUMBER, WAIT_CODE, WAIT_PASSWORD, READY, LOGGED_OUT, CLOSED
 }
 
 class TdLibException(val code: Int, message: String) : Exception(message)
+
+/** Result of probing one configured destination, surfaced by the "Test" buttons. */
+sealed class ChannelCheck {
+    data class Ok(val title: String) : ChannelCheck()
+    data class Failed(val reason: String) : ChannelCheck()
+}
+
+/** A chat the user named by ID, @username or invite link, once TDLib has confirmed it exists. */
+data class ResolvedChat(val chatId: Long, val title: String)
+
+/** A file pulled back out of Telegram, still sitting in TDLib's own cache directory. */
+data class DownloadedFile(val path: String, val fileName: String, val sizeBytes: Long)
+
+/**
+ * What Telegram says about an uploaded copy, without downloading a single byte. Used to answer
+ * "is my backup really there?" — before deleting anything local, and by the Verify screen.
+ */
+sealed class RemoteFile {
+    /** The message exists and still carries a file. [sizeBytes] is 0 only if Telegram omitted it. */
+    data class Present(val fileName: String, val sizeBytes: Long) : RemoteFile()
+
+    /** The message is gone, or no longer holds a file (someone edited or deleted it). */
+    data class Missing(val reason: String) : RemoteFile()
+
+    /**
+     * The check itself failed — no network, no chat access, session not ready. Deliberately
+     * distinct from [Missing]: an unreachable copy must never be treated as a lost one, or a
+     * flaky connection would authorise deleting the user's only local file.
+     */
+    data class Unknown(val reason: String) : RemoteFile()
+}
+
+private sealed class SendOutcome {
+    data class Success(val messageId: Long) : SendOutcome()
+    data class Failed(val code: Int, val reason: String) : SendOutcome()
+}
 
 /**
  * Thin coroutine-friendly wrapper around org.drinkless.tdlib.Client (the JNI binding
@@ -28,12 +76,46 @@ class TdClient private constructor(private val appContext: Context) {
 
     private val tag = "AirDrive.TdClient"
     private var client: Client? = null
+    private val settings = SettingsStore(appContext)
+
+    /** TDLib hands us its callbacks on its own threads; this is where we answer them from. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _authState = MutableStateFlow(AuthState.UNKNOWN)
     val authState: StateFlow<AuthState> = _authState
 
     private val _lastAuthError = MutableStateFlow<String?>(null)
     val lastAuthError: StateFlow<String?> = _lastAuthError
+
+    val isReady: Boolean get() = _authState.value == AuthState.READY
+
+    /**
+     * Every chat id TDLib has told us about in this session, tracked purely so the log can say
+     * how much of the account was loaded when a channel still fails to resolve.
+     */
+    private val knownChatIds: MutableSet<Long> = Collections.synchronizedSet(HashSet<Long>())
+
+    private val chatListMutex = Mutex()
+    @Volatile private var chatListLoaded = false
+
+    /** Set while TDLib is waiting for parameters, so saved credentials can be retried into it. */
+    @Volatile private var awaitingParameters = false
+
+    /** The account's own chat — "Saved Messages". Resolved once per session. */
+    @Volatile private var selfChatId = 0L
+
+    private val sendLock = Any()
+    private val pendingSends = HashMap<Long, CompletableDeferred<SendOutcome>>()
+    private val earlyOutcomes = HashMap<Long, SendOutcome>()
+
+    /**
+     * Invoked as TDLib streams a file out, with (localPath, uploadedBytes, totalBytes).
+     * Set by BackupRepository so the progress screen can show real throughput.
+     */
+    @Volatile var onUploadProgress: ((String, Long, Long) -> Unit)? = null
+
+    /** Same shape as [onUploadProgress] but for restore, keyed on TDLib's file id. */
+    @Volatile var onDownloadProgress: ((Int, Long, Long) -> Unit)? = null
 
     fun start() {
         if (client != null) return
@@ -43,91 +125,653 @@ class TdClient private constructor(private val appContext: Context) {
     private fun handleUpdate(update: TdApi.Object) {
         when (update) {
             is TdApi.UpdateAuthorizationState -> onAuthorizationState(update.authorizationState)
+            is TdApi.UpdateNewChat -> knownChatIds.add(update.chat.id)
+            is TdApi.UpdateMessageSendSucceeded ->
+                completeSend(update.oldMessageId, SendOutcome.Success(update.message.id))
+            is TdApi.UpdateMessageSendFailed ->
+                // TDLib 1.8.20+ wraps the failure in an Error object. Against an older TDLib
+                // build the two fields are flat (update.errorCode / update.errorMessage) and
+                // this single line is the only place that needs changing.
+                completeSend(
+                    update.oldMessageId,
+                    SendOutcome.Failed(update.error.code, update.error.message ?: "send failed")
+                )
+            is TdApi.UpdateFile -> reportFileProgress(update.file)
             else -> Unit
         }
+    }
+
+    private fun reportFileProgress(file: TdApi.File) {
+        val total = (if (file.expectedSize > 0) file.expectedSize else file.size).toLong()
+
+        val downloadListener = onDownloadProgress
+        val local = file.local
+        if (downloadListener != null && local != null && local.downloadedSize > 0) {
+            downloadListener(file.id, local.downloadedSize.toLong(), total)
+        }
+
+        val uploadListener = onUploadProgress ?: return
+        val path = local?.path
+        if (path.isNullOrEmpty()) return
+        val remote = file.remote ?: return
+        uploadListener(path, remote.uploadedSize.toLong(), total)
     }
 
     private fun onAuthorizationState(state: TdApi.AuthorizationState) {
         when (state) {
             is TdApi.AuthorizationStateWaitTdlibParameters -> {
-                val params = TdApi.SetTdlibParameters().apply {
-                    useTestDc = false
-                    databaseDirectory = appContext.filesDir.absolutePath + "/tdlib"
-                    filesDirectory = appContext.filesDir.absolutePath + "/tdlib-files"
-                    useFileDatabase = true
-                    useChatInfoDatabase = true
-                    useMessageDatabase = true
-                    useSecretChats = false
-                    apiId = BuildConfig.TELEGRAM_API_ID
-                    apiHash = BuildConfig.TELEGRAM_API_HASH
-                    systemLanguageCode = "en"
-                    deviceModel = android.os.Build.MODEL ?: "Android"
-                    systemVersion = android.os.Build.VERSION.RELEASE ?: "unknown"
-                    applicationVersion = BuildConfig.VERSION_NAME
-                }
-                client?.send(params) { }
+                awaitingParameters = true
+                sendTdlibParameters()
             }
-            is TdApi.AuthorizationStateWaitPhoneNumber -> _authState.value = AuthState.WAIT_PHONE_NUMBER
+            is TdApi.AuthorizationStateWaitPhoneNumber -> {
+                awaitingParameters = false
+                _authState.value = AuthState.WAIT_PHONE_NUMBER
+            }
             is TdApi.AuthorizationStateWaitCode -> _authState.value = AuthState.WAIT_CODE
             is TdApi.AuthorizationStateWaitPassword -> _authState.value = AuthState.WAIT_PASSWORD
-            is TdApi.AuthorizationStateReady -> _authState.value = AuthState.READY
-            is TdApi.AuthorizationStateLoggingOut -> _authState.value = AuthState.LOGGED_OUT
-            is TdApi.AuthorizationStateClosed -> _authState.value = AuthState.CLOSED
+            is TdApi.AuthorizationStateReady -> {
+                // A fresh session knows about no chats until loadChats() runs, so force the
+                // next resolve to reload the list.
+                awaitingParameters = false
+                chatListLoaded = false
+                _authState.value = AuthState.READY
+            }
+            is TdApi.AuthorizationStateLoggingOut -> resetSession(AuthState.LOGGED_OUT)
+            is TdApi.AuthorizationStateClosed -> resetSession(AuthState.CLOSED)
             else -> Unit
         }
     }
 
+    private fun resetSession(next: AuthState) {
+        knownChatIds.clear()
+        chatListLoaded = false
+        selfChatId = 0L
+        _authState.value = next
+    }
+
+    /**
+     * TDLib asks for its parameters from inside a callback, but the api_id/api_hash now live in
+     * DataStore (so any user can supply their own), and reading those suspends. The answer is
+     * sent from a coroutine instead; TDLib stays in WaitTdlibParameters until it arrives, which
+     * is also what makes [retryTdlibParameters] work after the user finally types them in.
+     */
+    private fun sendTdlibParameters() {
+        scope.launch {
+            val creds = settings.apiCredentials.first()
+            if (!creds.isUsable) {
+                Log.w(tag, "no Telegram API credentials configured")
+                _authState.value = AuthState.NEEDS_CREDENTIALS
+                return@launch
+            }
+            val params = TdApi.SetTdlibParameters().apply {
+                useTestDc = false
+                databaseDirectory = appContext.filesDir.absolutePath + "/tdlib"
+                filesDirectory = appContext.filesDir.absolutePath + "/tdlib-files"
+                useFileDatabase = true
+                useChatInfoDatabase = true
+                useMessageDatabase = true
+                useSecretChats = false
+                apiId = creds.apiId
+                apiHash = creds.apiHash
+                systemLanguageCode = "en"
+                deviceModel = android.os.Build.MODEL ?: "Android"
+                systemVersion = android.os.Build.VERSION.RELEASE ?: "unknown"
+                applicationVersion = BuildConfig.VERSION_NAME
+            }
+            try {
+                send(params)
+                _lastAuthError.value = null
+            } catch (e: TdLibException) {
+                // Wrong api_id/api_hash is by far the most likely cause, and it is recoverable:
+                // ask for them again rather than leaving the login screen spinning forever.
+                Log.w(tag, "setTdlibParameters rejected: ${e.code} ${e.message}")
+                _lastAuthError.value = "Telegram rejected those API credentials: ${e.message}"
+                _authState.value = AuthState.NEEDS_CREDENTIALS
+            } catch (e: Exception) {
+                _lastAuthError.value = e.message ?: e.javaClass.simpleName
+                _authState.value = AuthState.NEEDS_CREDENTIALS
+            }
+        }
+    }
+
+    /** Call after saving new credentials; TDLib is still waiting for them. */
+    fun retryTdlibParameters() {
+        if (!awaitingParameters) return
+        _authState.value = AuthState.UNKNOWN
+        sendTdlibParameters()
+    }
+
     suspend fun submitPhoneNumber(phoneNumber: String) {
-        send(TdApi.SetAuthenticationPhoneNumber(phoneNumber, null))
+        authStep { send(TdApi.SetAuthenticationPhoneNumber(phoneNumber, null)) }
     }
 
     suspend fun submitCode(code: String) {
-        send(TdApi.CheckAuthenticationCode(code))
+        authStep { send(TdApi.CheckAuthenticationCode(code)) }
     }
 
     suspend fun submitPassword(password: String) {
-        send(TdApi.CheckAuthenticationPassword(password))
+        authStep { send(TdApi.CheckAuthenticationPassword(password)) }
     }
 
     suspend fun logOut() {
         send(TdApi.LogOut())
     }
 
+    private suspend fun authStep(block: suspend () -> Unit) {
+        try {
+            _lastAuthError.value = null
+            block()
+        } catch (e: Exception) {
+            _lastAuthError.value = e.message ?: e.javaClass.simpleName
+            throw e
+        }
+    }
+
+    /** Suspends until TDLib finishes restoring the saved session, or gives up after [timeoutMs]. */
+    suspend fun awaitReady(timeoutMs: Long = 45_000): Boolean =
+        _authState.value == AuthState.READY ||
+            withTimeoutOrNull(timeoutMs) { authState.first { it == AuthState.READY } } != null
+
     /**
-     * Uploads a local file (already staged from SAF into app cache by the caller) to
-     * [chatId] with [caption], retrying automatically on FloodWait (error 429) by
-     * honoring the server-supplied retry-after delay. Returns the sent message id.
+     * TDLib starts every session with an empty chat list and only learns about chats that are
+     * explicitly loaded — sending to an id it has not seen yet fails with 400 "Chat not found",
+     * which is exactly what AirDrive was hitting on every upload. loadChats() has to be called
+     * after each restart, and it keeps returning chats until it answers 404 (nothing left).
      */
-    suspend fun uploadFile(localPath: String, chatId: Long, caption: String): Long {
+    suspend fun ensureChatListLoaded(force: Boolean = false) {
+        if (chatListLoaded && !force) return
+        chatListMutex.withLock {
+            if (chatListLoaded && !force) return
+            // Archived channels are not in the main list, and people very often archive a
+            // channel they only use as storage, so both lists have to be walked.
+            for (list in listOf<TdApi.ChatList>(TdApi.ChatListMain(), TdApi.ChatListArchive())) {
+                var pages = 0
+                while (pages < 40) {
+                    pages++
+                    try {
+                        send(
+                            TdApi.LoadChats().apply {
+                                chatList = list
+                                limit = 500
+                            }
+                        )
+                    } catch (e: TdLibException) {
+                        // 404 = every chat in this list is already loaded. Anything else is
+                        // worth logging but not fatal: requireChat() still has fallbacks.
+                        if (e.code != 404) Log.w(tag, "loadChats failed: ${e.code} ${e.message}")
+                        break
+                    }
+                    // updateNewChat arrives asynchronously; give the callbacks a moment to land
+                    // so the chats are really known before the first upload asks for one.
+                    delay(120)
+                }
+            }
+            Log.i(tag, "chat list loaded, ${knownChatIds.size} chats known")
+            chatListLoaded = true
+        }
+    }
+
+    private suspend fun tryGetChat(chatId: Long): TdApi.Chat? = try {
+        send(TdApi.GetChat().apply { this.chatId = chatId }) as TdApi.Chat
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * Returns the chat for [chatId], teaching TDLib about it first if necessary. Channels that
+     * are archived or have never been opened on this device are not in the main list at all, so
+     * the last resort is to open them straight from their supergroup id.
+     */
+    private suspend fun requireChat(chatId: Long): TdApi.Chat {
+        if (chatId == 0L) {
+            throw TdLibException(400, "No destination is set yet — choose one in Backup destination.")
+        }
+        tryGetChat(chatId)?.let { knownChatIds.add(chatId); return it }
+
+        ensureChatListLoaded()
+        tryGetChat(chatId)?.let { knownChatIds.add(chatId); return it }
+
+        if (chatId < CHANNEL_ID_BASE) {
+            val supergroupId = CHANNEL_ID_BASE - chatId
+            val opened = try {
+                send(
+                    TdApi.CreateSupergroupChat().apply {
+                        this.supergroupId = supergroupId
+                        force = false
+                    }
+                ) as TdApi.Chat
+            } catch (e: Exception) {
+                Log.w(tag, "createSupergroupChat($supergroupId) failed: ${e.message}")
+                null
+            }
+            if (opened != null) {
+                knownChatIds.add(opened.id)
+                return opened
+            }
+        }
+
+        ensureChatListLoaded(force = true)
+        tryGetChat(chatId)?.let { knownChatIds.add(chatId); return it }
+
+        throw TdLibException(400, chatNotFoundHelp(chatId))
+    }
+
+    private fun chatNotFoundHelp(chatId: Long): String {
+        val hint = if (chatId >= 0 || chatId > CHANNEL_ID_BASE) {
+            " That does not look like a channel ID — channel IDs look like -100xxxxxxxxxx."
+        } else {
+            ""
+        }
+        return "Chat not found ($chatId).$hint Check that the Telegram account you signed in with " +
+            "is a member (ideally an admin) of that channel and that the ID is exactly right."
+    }
+
+    /**
+     * The chat id of "Saved Messages" — a private chat with yourself. This is the zero-setup
+     * destination: every Telegram account has it, nothing has to be created, and only the account
+     * owner can read it.
+     */
+    suspend fun savedMessagesChatId(): Long {
+        selfChatId.takeIf { it != 0L }?.let { return it }
+        val me = send(TdApi.GetMe()) as TdApi.User
+        // Opening the private chat makes TDLib aware of it; sending to a bare user id would
+        // otherwise hit the same "Chat not found" wall channels used to.
+        val chat = send(
+            TdApi.CreatePrivateChat().apply {
+                userId = me.id
+                force = false
+            }
+        ) as TdApi.Chat
+        selfChatId = chat.id
+        knownChatIds.add(chat.id)
+        return chat.id
+    }
+
+    /**
+     * Turns whatever the user pasted into a real chat: a numeric ID, an @username, a t.me link,
+     * or a private invite link (which AirDrive joins, since the user asked for it by pasting it).
+     */
+    suspend fun resolveChatInput(raw: String): ResolvedChat {
+        val text = raw.trim()
+        if (text.isEmpty()) throw TdLibException(400, "Enter a channel ID, @username or t.me link")
+
+        inviteLinkOf(text)?.let { link ->
+            val info = send(TdApi.CheckChatInviteLink().apply { inviteLink = link })
+                as TdApi.ChatInviteLinkInfo
+            if (info.chatId != 0L) {
+                val chat = requireChat(info.chatId)
+                return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { "(untitled chat)" })
+            }
+            val joined = send(TdApi.JoinChatByInviteLink().apply { inviteLink = link }) as TdApi.Chat
+            knownChatIds.add(joined.id)
+            return ResolvedChat(joined.id, joined.title.orEmpty().ifBlank { "(untitled chat)" })
+        }
+
+        usernameOf(text)?.let { username ->
+            val chat = send(TdApi.SearchPublicChat(username)) as TdApi.Chat
+            knownChatIds.add(chat.id)
+            return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { "@$username" })
+        }
+
+        val id = internalLinkChatId(text) ?: normalizeChannelId(text)
+            ?: throw TdLibException(400, "“$text” is not a channel ID, @username or t.me link")
+        val chat = requireChat(id)
+        return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { "(untitled channel)" })
+    }
+
+    /** Telegram usernames: a letter, then 3–31 letters/digits/underscores. */
+    private val usernamePattern = Regex("^[A-Za-z][A-Za-z0-9_]{3,31}$")
+
+    /** Full https invite link if [text] is one, else null. Private links use the +/joinchat form. */
+    private fun inviteLinkOf(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("+") && trimmed.length > 4) return "https://t.me/$trimmed"
+        val path = telegramPath(trimmed) ?: return null
+        return if (path.startsWith("+") || path.startsWith("joinchat/")) "https://t.me/$path" else null
+    }
+
+    /** Bare username (no @) if [text] names a public chat, else null. */
+    private fun usernameOf(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("@")) {
+            return trimmed.drop(1).takeIf { usernamePattern.matches(it) }
+        }
+        val path = telegramPath(trimmed)
+        if (path != null) {
+            val first = path.substringBefore('/').substringBefore('?')
+            return first.takeIf { usernamePattern.matches(it) }
+        }
+        // A bare word that cannot be an ID is almost certainly a username typed without the @.
+        return trimmed.takeIf { !it.contains('/') && usernamePattern.matches(it) }
+    }
+
+    /** Chat id behind a private "t.me/c/<internal id>/<message>" link, else null. */
+    private fun internalLinkChatId(text: String): Long? {
+        val path = telegramPath(text.trim()) ?: return null
+        if (!path.startsWith("c/")) return null
+        val digits = path.removePrefix("c/").substringBefore('/').filter { it.isDigit() }
+        val id = digits.toLongOrNull() ?: return null
+        return CHANNEL_ID_BASE - id
+    }
+
+    /** Everything after the host for t.me / telegram.me / telegram.dog links; null if not one. */
+    private fun telegramPath(text: String): String? {
+        val lower = text.lowercase()
+        for (host in listOf("t.me/", "telegram.me/", "telegram.dog/")) {
+            val at = lower.indexOf(host)
+            if (at >= 0) return text.substring(at + host.length).trim().trimEnd('/')
+        }
+        return null
+    }
+
+    /**
+     * Creates a brand-new private channel owned by the signed-in account, so someone who does not
+     * want to make channels by hand can get one with a single tap.
+     */
+    suspend fun createChannel(title: String): ResolvedChat {
+        val name = title.trim().take(128).ifBlank { "AirDrive Backup" }
+        val chat = send(
+            TdApi.CreateNewSupergroupChat().apply {
+                this.title = name
+                isChannel = true
+                description = "Created by AirDrive"
+                location = null
+                forImport = false
+            }
+        ) as TdApi.Chat
+        knownChatIds.add(chat.id)
+        return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { name })
+    }
+
+    /** Diagnostic used by the "Test channels" button in Channel Configuration. */
+    suspend fun checkChannel(chatId: Long): ChannelCheck = try {
+        val chat = requireChat(chatId)
+        val title = chat.title
+        ChannelCheck.Ok(if (title.isNullOrBlank()) "(untitled channel)" else title)
+    } catch (e: Exception) {
+        ChannelCheck.Failed(e.message ?: e.javaClass.simpleName)
+    }
+
+    /**
+     * Uploads the file at [localPath] to [chatId] with [caption] and — unlike the previous
+     * version — only returns once Telegram has actually accepted the bytes. sendMessage()
+     * itself returns immediately with a temporary message, so we wait for the matching
+     * updateMessageSendSucceeded / updateMessageSendFailed. Retries FloodWait (429) using the
+     * server-supplied delay. Returns the final message id.
+     */
+    suspend fun uploadFile(localPath: String, chatId: Long, caption: String, sizeBytes: Long): Long {
         var attempt = 0
         while (true) {
             try {
-                val message = sendMessageWithDocument(localPath, chatId, caption)
-                return message.id
+                requireChat(chatId)
+                return sendDocumentAndAwait(localPath, chatId, caption, sizeBytes)
             } catch (e: TdLibException) {
-                if (e.code == 429) {
-                    val retryAfter = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull() ?: 5L
-                    Log.w(tag, "FloodWait: retrying after ${retryAfter}s")
-                    delay(retryAfter * 1000)
-                    attempt++
-                    if (attempt > 10) throw e
-                } else {
-                    throw e
-                }
+                val retryable = e.code == 429 || e.code == 500
+                if (!retryable || attempt >= 10) throw e
+                val retryAfter = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull() ?: 5L
+                Log.w(tag, "retrying after ${retryAfter}s (${e.code} ${e.message})")
+                delay(retryAfter.coerceIn(1L, 600L) * 1000L)
+                attempt++
             }
         }
     }
 
-    private suspend fun sendMessageWithDocument(localPath: String, chatId: Long, caption: String): TdApi.Message {
-        val content = TdApi.InputMessageDocument(
-            TdApi.InputFileLocal(localPath),
-            TdApi.FormattedText(caption, emptyArray())
-        )
-        val sendRequest = TdApi.SendMessage().apply {
+    private suspend fun sendDocumentAndAwait(
+        localPath: String,
+        chatId: Long,
+        caption: String,
+        sizeBytes: Long
+    ): Long {
+        val inputDocument = TdApi.InputDocument().apply {
+            document = TdApi.InputFileLocal(localPath)
+            thumbnail = null
+            disableContentTypeDetection = true
+        }
+        val content = TdApi.InputMessageDocument().apply {
+            document = inputDocument
+            // Keep every file a plain document: no re-encoding, no compression, bytes land
+            // in the channel exactly as they are on disk.
+            this.caption = TdApi.FormattedText(caption, emptyArray())
+        }
+        val request = TdApi.SendMessage().apply {
             this.chatId = chatId
             inputMessageContent = content
         }
-        return send(sendRequest) as TdApi.Message
+        val queued = send(request) as TdApi.Message
+        val tempId = queued.id
+        val waiter = registerSend(tempId)
+        try {
+            // Assume a floor of ~20KB/s before declaring the upload wedged.
+            val budget = (180_000L + (sizeBytes / 20_000L) * 1000L).coerceAtMost(3 * 60 * 60 * 1000L)
+            val outcome = withTimeoutOrNull(budget) { waiter.await() }
+                ?: throw TdLibException(408, "Upload timed out after ${budget / 1000}s")
+            return when (outcome) {
+                is SendOutcome.Success -> outcome.messageId
+                is SendOutcome.Failed -> throw TdLibException(outcome.code, outcome.reason)
+            }
+        } finally {
+            forgetSend(tempId)
+        }
+    }
+
+    private fun registerSend(tempId: Long): CompletableDeferred<SendOutcome> {
+        val waiter = CompletableDeferred<SendOutcome>()
+        synchronized(sendLock) {
+            val already = earlyOutcomes.remove(tempId)
+            if (already != null) waiter.complete(already) else pendingSends[tempId] = waiter
+        }
+        return waiter
+    }
+
+    private fun completeSend(tempId: Long, outcome: SendOutcome) {
+        synchronized(sendLock) {
+            val waiter = pendingSends.remove(tempId)
+            if (waiter != null) {
+                waiter.complete(outcome)
+            } else {
+                // The update can beat send()'s own callback; keep it for whoever asks next.
+                if (earlyOutcomes.size > 256) earlyOutcomes.clear()
+                earlyOutcomes[tempId] = outcome
+            }
+        }
+    }
+
+    private fun forgetSend(tempId: Long) {
+        synchronized(sendLock) {
+            pendingSends.remove(tempId)
+            earlyOutcomes.remove(tempId)
+        }
+    }
+
+    /**
+     * Pulls a previously uploaded file back out of Telegram. Returns the path inside TDLib's own
+     * files directory; the caller copies it where the user wants and never mutates it.
+     */
+    suspend fun downloadMessageFile(chatId: Long, messageId: Long): DownloadedFile {
+        requireChat(chatId)
+        val message = send(
+            TdApi.GetMessage().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+            }
+        ) as TdApi.Message
+        val payload = fileOf(message.content)
+            ?: throw TdLibException(404, "That message no longer holds a file")
+        val done = send(
+            TdApi.DownloadFile().apply {
+                fileId = payload.first.id
+                priority = 16
+                offset = 0
+                limit = 0
+                synchronous = true
+            }
+        ) as TdApi.File
+        val path = done.local?.path
+        if (path.isNullOrEmpty()) throw TdLibException(500, "Telegram did not return the file")
+        val size = (if (done.size > 0) done.size else done.expectedSize).toLong()
+        return DownloadedFile(path, payload.second, size)
+    }
+
+    /**
+     * Replaces the document attached to an existing message. Used only by the backup manifest,
+     * so repeated checkpoints update one message in place instead of piling up a new document
+     * in Saved Messages every time. Throws if the message no longer exists (e.g. the user
+     * deleted it, or it was never actually sent) — the caller falls back to sending fresh.
+     */
+    suspend fun editMessageDocument(chatId: Long, messageId: Long, localPath: String, caption: String) {
+        val inputDocument = TdApi.InputDocument().apply {
+            document = TdApi.InputFileLocal(localPath)
+            thumbnail = null
+            disableContentTypeDetection = true
+        }
+        val content = TdApi.InputMessageDocument().apply {
+            document = inputDocument
+            this.caption = TdApi.FormattedText(caption, emptyArray())
+        }
+        send(
+            TdApi.EditMessageMedia().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+                inputMessageContent = content
+            }
+        )
+    }
+
+    /**
+     * Pins a message so it survives casual "clear chat" actions and stays easy to find by eye
+     * — Telegram's own closest equivalent to a "do not delete" label. Used only for the backup
+     * manifest; failing to pin (e.g. no pin rights, unlikely in Saved Messages) is non-fatal.
+     */
+    suspend fun pinMessage(chatId: Long, messageId: Long) {
+        send(
+            TdApi.PinChatMessage().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+                disableNotification = true
+                onlyForSelf = false
+            }
+        )
+    }
+
+    /**
+     * Deletes AirDrive's own uploaded copies. `revoke = true` removes them for everyone rather
+     * than only from this account's view, which is what "permanently remove the Telegram copy"
+     * has to mean — a copy still sitting in the channel for other members would make the promise
+     * a lie.
+     *
+     * Telegram accepts a limited batch per call, so the ids are chunked here. Deleting an id that
+     * is already gone is not an error, so a partially-completed purge can safely be retried.
+     */
+    suspend fun deleteMessages(chatId: Long, messageIds: LongArray) {
+        if (messageIds.isEmpty()) return
+        requireChat(chatId)
+        messageIds.toList().chunked(DELETE_BATCH).forEach { batch ->
+            send(
+                TdApi.DeleteMessages().apply {
+                    this.chatId = chatId
+                    this.messageIds = batch.toLongArray()
+                    revoke = true
+                }
+            )
+        }
+    }
+
+    /**
+     * Asks Telegram whether one uploaded copy is still there, without downloading it. Never
+     * throws: the three outcomes are the whole point, and the caller has to be able to tell
+     * "your backup is gone" apart from "I could not check right now".
+     */
+    suspend fun probeMessage(chatId: Long, messageId: Long): RemoteFile = try {
+        requireChat(chatId)
+        val message = send(
+            TdApi.GetMessage().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+            }
+        ) as TdApi.Message
+        val payload = fileOf(message.content)
+        if (payload == null) {
+            RemoteFile.Missing("The message no longer holds a file")
+        } else {
+            val file = payload.first
+            val size = when {
+                file.size > 0 -> file.size.toLong()
+                file.expectedSize > 0 -> file.expectedSize.toLong()
+                else -> 0L
+            }
+            RemoteFile.Present(payload.second, size)
+        }
+    } catch (e: TdLibException) {
+        // 404 and "message not found" mean the copy is genuinely gone; anything else (401, 420,
+        // 500, no network) is a failure to check, and must not be reported as data loss.
+        val looksGone = e.code == 404 ||
+            e.message?.contains("not found", ignoreCase = true) == true ||
+            e.message?.contains("MESSAGE_ID_INVALID", ignoreCase = true) == true
+        if (looksGone) {
+            RemoteFile.Missing(e.message ?: "Telegram has no such message")
+        } else {
+            RemoteFile.Unknown(e.message ?: "Telegram error ${e.code}")
+        }
+    } catch (e: Exception) {
+        RemoteFile.Unknown(e.message ?: e.javaClass.simpleName)
+    }
+
+    /** The document/video/audio/photo payload of a message, with the best file name available. */
+    private fun fileOf(content: TdApi.MessageContent?): Pair<TdApi.File, String>? = when (content) {
+        is TdApi.MessageDocument ->
+            content.document.document to content.document.fileName.orEmpty().ifBlank { "file" }
+        is TdApi.MessageVideo ->
+            content.video.video to content.video.fileName.orEmpty().ifBlank { "video.mp4" }
+        is TdApi.MessageAudio ->
+            content.audio.audio to content.audio.fileName.orEmpty().ifBlank { "audio.mp3" }
+        is TdApi.MessageAnimation ->
+            content.animation.animation to
+                content.animation.fileName.orEmpty().ifBlank { "animation.mp4" }
+        // Only reachable for files someone re-sent as a compressed photo; AirDrive always
+        // uploads documents, but restore should still cope with it.
+        is TdApi.MessagePhoto ->
+            content.photo.sizes.maxByOrNull { it.photo.expectedSize }?.let { it.photo to "photo.jpg" }
+        else -> null
+    }
+
+    /**
+     * Finds the newest AirDrive backup-data manifest sitting in Saved Messages, purely by
+     * searching for [caption] text — no locally stored message id is needed, so this still
+     * works after a full uninstall/reinstall wiped every local record. Returns null if none
+     * has ever been uploaded from this account.
+     */
+    suspend fun findLatestOwnDocument(caption: String): TdApi.Message? {
+        val chatId = savedMessagesChatId()
+        val found = send(
+            TdApi.SearchChatMessages().apply {
+                this.chatId = chatId
+                query = caption
+                fromMessageId = 0L
+                offset = 0
+                limit = 5
+                filter = TdApi.SearchMessagesFilterDocument()
+            }
+        ) as TdApi.FoundChatMessages
+        // Reverse-chronological already, so the first hit is the newest manifest.
+        return found.messages.firstOrNull()
+    }
+
+    /** Downloads the document attached to [message] (already known, unlike [downloadMessageFile]). */
+    suspend fun downloadFile(message: TdApi.Message): DownloadedFile {
+        val payload = fileOf(message.content) ?: throw TdLibException(404, "That message holds no file")
+        val done = send(
+            TdApi.DownloadFile().apply {
+                fileId = payload.first.id
+                priority = 16
+                offset = 0
+                limit = 0
+                synchronous = true
+            }
+        ) as TdApi.File
+        val path = done.local?.path
+        if (path.isNullOrEmpty()) throw TdLibException(500, "Telegram did not return the file")
+        val size = (if (done.size > 0) done.size else done.expectedSize).toLong()
+        return DownloadedFile(path, payload.second, size)
     }
 
     private suspend fun send(function: TdApi.Function<*>): TdApi.Object =
@@ -142,6 +786,12 @@ class TdClient private constructor(private val appContext: Context) {
         }
 
     companion object {
+        /** chatId == CHANNEL_ID_BASE - supergroupId, e.g. supergroup 4291403787 -> -1004291403787. */
+        const val CHANNEL_ID_BASE = -1_000_000_000_000L
+
+        /** Telegram rejects oversized deleteMessages batches; 100 is the documented safe size. */
+        private const val DELETE_BATCH = 100
+
         @Volatile private var instance: TdClient? = null
 
         fun get(context: Context): TdClient =
@@ -151,5 +801,21 @@ class TdClient private constructor(private val appContext: Context) {
                     instance = it
                 }
             }
+
+        /**
+         * Turns whatever the user pasted into a channel chat id. Accepts "-1004291403787",
+         * "1004291403787", "4291403787" and "-4291403787", all of which people copy out of
+         * different Telegram clients.
+         */
+        fun normalizeChannelId(raw: String): Long? {
+            val digits = raw.trim().filter { it.isDigit() }
+            if (digits.isEmpty()) return null
+            val asLong = digits.toLongOrNull() ?: return null
+            return when {
+                digits.startsWith("100") && digits.length >= 13 -> -asLong
+                digits.length in 9..12 -> -("100$digits".toLongOrNull() ?: return null)
+                else -> -asLong
+            }
+        }
     }
 }

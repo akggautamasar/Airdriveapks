@@ -9,7 +9,18 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Legacy storage read for devices/paths outside SAF trees when needed -->
+    <!-- All files access. AirDrive's job is to back up every folder in internal storage
+         without the user hand-picking SAF trees, which is exactly what this permission is
+         for; lint's ScopedStorage warning is expected and suppressed on purpose. Granting
+         it is a Settings toggle (Environment.isExternalStorageManager), not a runtime
+         dialog - see util/StorageAccess.kt. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <!-- Legacy storage read for devices/paths outside SAF trees when needed. On API 30-32
+         this is what makes a full-storage walk possible before All files access is granted;
+         API 33+ uses the READ_MEDIA_* permissions below. -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -24,6 +35,7 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AirDrive"
@@ -42,10 +54,33 @@
             </intent-filter>
         </activity>
 
-        <!-- androidx.work's own foreground-service infra (declared by the WorkManager
-             library manifest) hosts BackupWorker's setForeground() notification, and
-             WorkManager itself persists periodic work across device reboots, so no
-             app-declared Service or BOOT_COMPLETED receiver is needed here. -->
+        <!-- androidx.work's own foreground service hosts BackupWorker's setForeground()
+             notification, and WorkManager persists periodic work across reboots, so the app
+             declares no Service or BOOT_COMPLETED receiver of its own.
+
+             It does have to name the service type: on Android 14 startForeground() throws
+             MissingForegroundServiceTypeException when the runtime type is absent from the
+             merged manifest, and the WorkManager 2.9 library manifest declares none. This
+             merge adds dataSync, matching ForegroundInfo in BackupWorker and the
+             FOREGROUND_SERVICE_DATA_SYNC permission above. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- "Share" on a restored file hands another app a content:// URI rather than a raw
+             file:// path, which Android has rejected since Nougat (FileUriExposedException).
+             The declared roots are only the two places AirDrive ever writes: its own cache and
+             Downloads/AirDrive. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
     </application>
 
