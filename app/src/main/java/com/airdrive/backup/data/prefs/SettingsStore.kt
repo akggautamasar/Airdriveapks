@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.airdrive.backup.BuildConfig
 import com.airdrive.backup.data.db.BackupCategory
+import com.airdrive.backup.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -83,6 +84,8 @@ object Keys {
      *  manifest document per checkpoint. */
     val MANIFEST_CHAT_ID = longPreferencesKey("manifest_chat_id")
     val MANIFEST_MESSAGE_ID = longPreferencesKey("manifest_message_id")
+
+    val THEME_MODE = stringPreferencesKey("theme_mode")
 
     val DESTINATION_MODE = stringPreferencesKey("destination_mode")
     val SINGLE_CHAT_ID = longPreferencesKey("single_chat_id")
@@ -198,6 +201,16 @@ class SettingsStore(private val context: Context) {
             it[Keys.MANIFEST_CHAT_ID] = chatId
             it[Keys.MANIFEST_MESSAGE_ID] = messageId
         }
+    }
+
+    // ---------------------------------------------------------------- appearance
+
+    val themeMode: Flow<ThemeMode> = context.dataStore.data.map { prefs ->
+        prefs[Keys.THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.dataStore.edit { it[Keys.THEME_MODE] = mode.name }
     }
 
     // ---------------------------------------------------------------- destinations

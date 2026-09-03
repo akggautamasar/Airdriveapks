@@ -17,6 +17,7 @@ import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
+import com.airdrive.backup.ui.theme.ThemeMode
 import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
 import kotlinx.coroutines.launch
@@ -40,6 +41,7 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
     val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
     val autoRetry by settings.autoRetryFailed.collectAsState(initial = true)
+    val themeMode by settings.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
 
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
@@ -135,6 +137,20 @@ fun BackupSettingsScreen(nav: NavHostController) {
             )
 
             Spacer(Modifier.height(16.dp))
+            Text("Appearance", style = MaterialTheme.typography.titleMedium)
+            Column(Modifier.padding(top = 4.dp)) {
+                ThemeModeOption("Follow system", ThemeMode.SYSTEM, themeMode) {
+                    scope.launch { settings.setThemeMode(it) }
+                }
+                ThemeModeOption("Light", ThemeMode.LIGHT, themeMode) {
+                    scope.launch { settings.setThemeMode(it) }
+                }
+                ThemeModeOption("Dark", ThemeMode.DARK, themeMode) {
+                    scope.launch { settings.setThemeMode(it) }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
             Text("Backup data on Telegram", style = MaterialTheme.typography.titleMedium)
             Text(
                 "AirDrive keeps a list of everything already backed up inside your own Saved " +
@@ -210,6 +226,23 @@ fun BackupSettingsScreen(nav: NavHostController) {
             ) { Text("Retry failed uploads on next run") }
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun ThemeModeOption(
+    label: String,
+    option: ThemeMode,
+    selected: ThemeMode,
+    onPick: (ThemeMode) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = option == selected, onClick = { onPick(option) })
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge)
     }
 }
 

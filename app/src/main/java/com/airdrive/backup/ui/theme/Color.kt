@@ -12,3 +12,13 @@ val AirTextSecondary = Color(0xFF9AA6B8)
 val AirSuccess = Color(0xFF34C77B)
 val AirWarning = Color(0xFFE0A83B)
 val AirError = Color(0xFFE05B5B)
+
+// Light palette mirrors the dark one's structure (same blue accent, same relative contrast)
+// rather than being a separate design — the app should feel like the same app either way.
+val AirBlueLightOn = Color(0xFFFFFFFF)
+val AirBackgroundLight = Color(0xFFF7F8FA)
+val AirSurfaceLight = Color(0xFFFFFFFF)
+val AirSurfaceVariantLight = Color(0xFFE9ECF2)
+val AirTextPrimaryLight = Color(0xFF1B2230)
+val AirTextSecondaryLight = Color(0xFF5B6472)
+val AirErrorLight = Color(0xFFC53030)
