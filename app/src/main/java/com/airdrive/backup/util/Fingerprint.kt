@@ -2,8 +2,6 @@ package com.airdrive.backup.util
 
 import android.content.Context
 import android.net.Uri
-import java.io.File
-import java.io.InputStream
 import java.security.MessageDigest
 
 /**
@@ -12,25 +10,15 @@ import java.security.MessageDigest
  * the last 256KB of the file (or the whole file if smaller than 512KB). Two files with the
  * same size whose head and tail bytes match are treated as the same file for backup purposes,
  * which is what lets AirDrive recognize an already-backed-up file even after a rename.
- *
- * The byte-for-byte behaviour is shared by both entry points on purpose: fingerprints written
- * by the old SAF-only scanner must still match the ones computed from a direct file path, or
- * every already-uploaded file would look new after the switch to whole-device scanning.
  */
 object Fingerprint {
     private const val CHUNK = 256 * 1024L
 
-    fun compute(context: Context, uri: Uri, sizeBytes: Long): String =
-        digest(sizeBytes) { context.contentResolver.openInputStream(uri) }
-
-    fun compute(file: File, sizeBytes: Long = file.length()): String =
-        digest(sizeBytes) { file.inputStream() }
-
-    private fun digest(sizeBytes: Long, openStream: () -> InputStream?): String {
+    fun compute(context: Context, uri: Uri, sizeBytes: Long): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update(sizeBytes.toString().toByteArray())
 
-        openStream()?.use { input ->
+        context.contentResolver.openInputStream(uri)?.use { input ->
             if (sizeBytes <= CHUNK * 2) {
                 val buffer = ByteArray(8192)
                 var read: Int

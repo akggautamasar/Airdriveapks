@@ -109,9 +109,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    // Declared explicitly rather than leaned on transitively through material3: the screens use
-    // foundation APIs directly (verticalScroll, LazyColumn, LazyVerticalGrid).
-    implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.7.7")

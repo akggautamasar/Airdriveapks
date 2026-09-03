@@ -23,19 +23,14 @@ import com.airdrive.backup.ui.screens.*
 object Routes {
     const val WELCOME = "welcome"
     const val TELEGRAM_LOGIN = "telegram_login"
-    const val API_CREDENTIALS = "api_credentials"
-    const val STORAGE_ACCESS = "storage_access"
     const val FOLDER_SELECT = "folder_select"
     const val READY = "ready"
     const val DASHBOARD = "dashboard"
     const val BACKUP_PROGRESS = "backup_progress"
     const val ACTIVITY_HISTORY = "activity_history"
     const val CATEGORIES_STATS = "categories_stats"
-    const val DESTINATION = "destination"
     const val CHANNEL_CONFIG = "channel_config"
     const val BACKUP_SETTINGS = "backup_settings"
-    const val ADVANCED_SETTINGS = "advanced_settings"
-    const val RESTORE = "restore"
     const val FAILED_UPLOADS = "failed_uploads"
     const val ABOUT = "about"
 }
@@ -76,19 +71,14 @@ fun AppNav() {
     NavHost(navController = navController, startDestination = resolved) {
         composable(Routes.WELCOME) { WelcomeScreen(navController) }
         composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
-        composable(Routes.API_CREDENTIALS) { ApiCredentialsScreen(navController) }
-        composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController) }
         composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
         composable(Routes.READY) { ReadyScreen(navController) }
         composable(Routes.DASHBOARD) { DashboardScreen(navController) }
         composable(Routes.BACKUP_PROGRESS) { BackupProgressScreen(navController) }
         composable(Routes.ACTIVITY_HISTORY) { ActivityHistoryScreen(navController) }
         composable(Routes.CATEGORIES_STATS) { CategoriesStatsScreen(navController) }
-        composable(Routes.DESTINATION) { DestinationScreen(navController) }
         composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
         composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
-        composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
-        composable(Routes.RESTORE) { RestoreScreen(navController) }
         composable(Routes.FAILED_UPLOADS) { FailedUploadsScreen(navController) }
         composable(Routes.ABOUT) { AboutScreen(navController) }
     }

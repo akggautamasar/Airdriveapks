@@ -8,13 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.AppNav
 import com.airdrive.backup.ui.theme.AirDriveTheme
-import com.airdrive.backup.ui.theme.ThemeMode
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,10 +26,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            val settings = remember { SettingsStore(this) }
-            val themeMode by settings.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
-
-            AirDriveTheme(mode = themeMode) {
+            AirDriveTheme {
                 AppNav()
             }
         }

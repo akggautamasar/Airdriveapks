@@ -15,10 +15,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.Routes
-import com.airdrive.backup.util.StorageAccess
 import kotlinx.coroutines.launch
+
+private fun categoryLabel(c: BackupCategory) = when (c) {
+    BackupCategory.PHOTOS -> "Photos"
+    BackupCategory.VIDEOS -> "Videos"
+    BackupCategory.PDFS -> "PDFs"
+    BackupCategory.WORD_EXCEL -> "Documents"
+    BackupCategory.AUDIO -> "Audio"
+    BackupCategory.CALL_RECORDINGS -> "Call recordings"
+    BackupCategory.OTHER_FILES -> "Other files"
+}
 
 private fun lastSegment(uriString: String): String =
     try {
@@ -27,11 +37,6 @@ private fun lastSegment(uriString: String): String =
         uriString
     }
 
-/**
- * Optional now. With "All files access" granted AirDrive walks the whole phone and never needs a
- * picked folder, so nothing on this screen blocks Continue — it exists for devices where that
- * permission is unavailable or declined.
- */
 @Composable
 fun FolderSelectionScreen(nav: NavHostController) {
     val context = LocalContext.current
@@ -39,9 +44,7 @@ fun FolderSelectionScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
 
     val authorizedUris by settings.authorizedTreeUris.collectAsState(initial = emptySet())
-    val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
-    var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
-    OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
+    val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
 
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -55,24 +58,26 @@ fun FolderSelectionScreen(nav: NavHostController) {
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-            Text(
-                "Specific folders",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                if (wholeDevice && hasAccess) {
-                    "Not needed: AirDrive is already scanning every folder on the phone. Anything " +
-                        "you add here is simply included as well."
-                } else {
-                    "AirDrive will scan only the folders listed here."
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text("Choose what to back up", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
 
-            Spacer(Modifier.height(20.dp))
+            BackupCategory.values().forEach { category ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = category in enabledCategories,
+                        onCheckedChange = { checked ->
+                            val next = if (checked) enabledCategories + category else enabledCategories - category
+                            scope.launch { settings.setEnabledCategories(next) }
+                        }
+                    )
+                    Text(categoryLabel(category))
+                }
+            }
+
+            Spacer(Modifier.height(24.dp))
             Text("Authorized folders", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
 
@@ -89,9 +94,7 @@ fun FolderSelectionScreen(nav: NavHostController) {
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyMedium
                             )
-                            IconButton(onClick = {
-                                scope.launch { settings.removeAuthorizedTreeUri(uriString) }
-                            }) {
+                            IconButton(onClick = { scope.launch { settings.removeAuthorizedTreeUri(uriString) } }) {
                                 Icon(Icons.Default.Close, contentDescription = "Remove")
                             }
                         }
@@ -101,15 +104,13 @@ fun FolderSelectionScreen(nav: NavHostController) {
                     OutlinedButton(
                         onClick = { folderPicker.launch(null) },
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
-                    ) { Text("+ Choose folders") }
+                    ) { Text("+ Choose Folders") }
                 }
             }
 
             Button(
-                onClick = {
-                    // Never disabled: requiring a folder here is what made onboarding a dead end.
-                    nav.navigate(Routes.READY)
-                },
+                onClick = { nav.navigate(Routes.READY) },
+                enabled = authorizedUris.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth().height(52.dp)
             ) { Text("Continue") }
         }

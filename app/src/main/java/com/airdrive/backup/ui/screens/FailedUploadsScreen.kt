@@ -15,7 +15,6 @@ import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.FileRecord
 import com.airdrive.backup.data.repo.BackupRepository
-import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.work.WorkScheduler
 import kotlinx.coroutines.launch
 
@@ -24,7 +23,7 @@ import kotlinx.coroutines.launch
 fun FailedUploadsScreen(nav: NavHostController) {
     val context = LocalContext.current
     val db = remember { AppDatabase.get(context) }
-    val repository = remember { BackupRepository.get(context) }
+    val repository = remember { BackupRepository(context) }
     val scope = rememberCoroutineScope()
 
     val failed by db.fileRecordDao().failedFilesFlow().collectAsState(initial = emptyList())
@@ -57,44 +56,6 @@ fun FailedUploadsScreen(nav: NavHostController) {
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            // 709 rows all failing for the same reason is a configuration problem, not 709
-            // problems, so say so once at the top instead of making the user scroll.
-            val commonError = failed.groupingBy { it.lastError ?: "Unknown error" }
-                .eachCount().maxByOrNull { it.value }
-            if (commonError != null && commonError.value > 1) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(
-                                "${commonError.value} of these failed the same way",
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(commonError.key, style = MaterialTheme.typography.bodyMedium)
-                            if (commonError.key.contains("Chat not found", ignoreCase = true) ||
-                                commonError.key.contains("channel", ignoreCase = true)
-                            ) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "Open Channel Configuration and use “Test all channels” — the " +
-                                        "signed-in Telegram account has to be a member of every " +
-                                        "channel it uploads to.",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Button(onClick = { nav.navigate(Routes.CHANNEL_CONFIG) }) {
-                                    Text("Check channels")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             items(failed) { record: FileRecord ->
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                     Column(modifier = Modifier.padding(14.dp)) {

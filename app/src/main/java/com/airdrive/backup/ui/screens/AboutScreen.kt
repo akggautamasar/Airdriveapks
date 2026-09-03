@@ -15,7 +15,6 @@ import androidx.navigation.NavHostController
 import com.airdrive.backup.BuildConfig
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.data.prefs.SettingsStore
-import com.airdrive.backup.ui.nav.Routes
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,22 +44,11 @@ fun AboutScreen(nav: NavHostController) {
             Spacer(Modifier.height(16.dp))
             Text(
                 "AirDrive is your personal, Telegram-powered backup client. Files you choose to " +
-                    "back up are uploaded to your own Telegram \u2014 Saved Messages or private " +
-                    "channels you control \u2014 using your own Telegram API keys. Nothing is ever " +
-                    "sent anywhere else, and originals on your device are never deleted.",
+                    "back up are uploaded to your own private Telegram channels \u2014 nothing is " +
+                    "ever sent anywhere else, and originals on your device are never deleted.",
                 style = MaterialTheme.typography.bodyLarge
             )
-            Spacer(Modifier.height(16.dp))
-            TextButton(onClick = { nav.navigate(Routes.API_CREDENTIALS) }) {
-                Text("Telegram API keys")
-            }
-            TextButton(onClick = { nav.navigate(Routes.DESTINATION) }) {
-                Text("Backup destination")
-            }
-            TextButton(onClick = { nav.navigate(Routes.ADVANCED_SETTINGS) }) {
-                Text("Export my data")
-            }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(32.dp))
             OutlinedButton(
                 onClick = {
                     scope.launch {

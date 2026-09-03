@@ -9,7 +9,7 @@ enum class BackupCategory {
 }
 
 enum class UploadStatus {
-    PENDING, UPLOADING, UPLOADED, FAILED, SKIPPED, CANCELLED
+    PENDING, UPLOADING, UPLOADED, FAILED, SKIPPED
 }
 
 /**
