@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.util.NotificationHelper
 import com.airdrive.backup.util.StorageAccess
@@ -17,6 +18,10 @@ class BackupWorker(appContext: Context, params: WorkerParameters) : CoroutineWor
     private val repository = BackupRepository.get(appContext)
     private var lastNotifyAt = 0L
     private var lastNotifyText = ""
+
+    /** Set only for a per-category "Upload" tap; null means every enabled category, as before. */
+    private val categoryFilter: BackupCategory? =
+        params.inputData.getString(WORK_INPUT_CATEGORY)?.let { runCatching { BackupCategory.valueOf(it) }.getOrNull() }
 
     override suspend fun doWork(): Result {
         NotificationHelper.ensureChannel(applicationContext)
@@ -37,7 +42,7 @@ class BackupWorker(appContext: Context, params: WorkerParameters) : CoroutineWor
             notify("Scanning storage…", 0, indeterminate = true)
             repository.scan()
 
-            repository.runBackupQueue { _, _ ->
+            repository.runBackupQueue(categoryFilter) { _, _ ->
                 val p = repository.progress.value
                 val label = if (p.totalFiles == 0) {
                     "Nothing to back up"

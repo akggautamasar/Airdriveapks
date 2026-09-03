@@ -9,11 +9,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.backup.ManifestSync
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.telegram.AuthState
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.ui.nav.Routes
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -32,14 +34,25 @@ fun TelegramLoginScreen(nav: NavHostController) {
     var errorText by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
+    var restoreStatus by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(authState) {
         if (authState == AuthState.READY) {
             settings.setTelegramLoggedIn(true)
-            // Fire-and-forget: checks Saved Messages for a manifest from a previous install and,
-            // if the local DB is otherwise empty, restores it (already-backed-up files + old
-            // destination settings). Not awaited — login should not stall on a network round
-            // trip, and it is a no-op the vast majority of the time (a normal, non-fresh install).
-            scope.launch { BackupRepository.get(context).restoreManifestIfFreshInstall() }
+            // Awaited, not fire-and-forget: this used to run in the background while the user
+            // could already reach the dashboard and tap "Back up now", which raced ahead of the
+            // restore and re-queued every file as brand new. Now nothing proceeds until this is
+            // settled, so a reinstall always recognises its old files before scanning can start.
+            restoreStatus = "Checking Telegram for previous backup data\u2026"
+            val result = BackupRepository.get(context).restoreManifestIfFreshInstall()
+            restoreStatus = when (result) {
+                is ManifestSync.RestoreResult.Restored ->
+                    "Found ${result.fileCount} previously backed-up file(s) \u2014 they will be skipped."
+                ManifestSync.RestoreResult.NoManifestFound, ManifestSync.RestoreResult.NothingToDo -> null
+                ManifestSync.RestoreResult.NotSignedIn -> null
+                is ManifestSync.RestoreResult.Failed -> null
+            }
+            if (restoreStatus != null) delay(1200)
             // Onboarding no longer routes through a mandatory folder picker; it asks for storage
             // access instead, and only the first time.
             val target = if (settings.onboardingDone.first()) Routes.DASHBOARD else Routes.STORAGE_ACCESS
@@ -166,7 +179,7 @@ fun TelegramLoginScreen(nav: NavHostController) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text("Connected. Continuing\u2026")
+                        Text(restoreStatus ?: "Connected. Continuing\u2026")
                     }
                 }
             }

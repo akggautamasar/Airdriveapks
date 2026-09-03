@@ -212,7 +212,10 @@ class BackupRepository private constructor(private val context: Context) {
      * confirmed it. Returns when the queue is drained or the coroutine is cancelled — a
      * cancelled file goes back to PENDING rather than being lost.
      */
-    suspend fun runBackupQueue(onEachDone: suspend (FileRecord, Boolean) -> Unit = { _, _ -> }) {
+    suspend fun runBackupQueue(
+        categoryFilter: BackupCategory? = null,
+        onEachDone: suspend (FileRecord, Boolean) -> Unit = { _, _ -> }
+    ) {
         withContext(Dispatchers.IO) {
             queueMutex.withLock {
                 // Anything left UPLOADING is from a run that was killed; it would otherwise be
@@ -240,8 +243,13 @@ class BackupRepository private constructor(private val context: Context) {
 
                 val order = settings.uploadOrder.first()
                 val template = settings.captionTemplate.first()
-                val total = dao.pendingCount()
-                val totalBytes = dao.pendingBytes()
+                // categoryFilter == null means "the normal full run", which still has to respect
+                // which categories the user has unchecked on the dashboard — otherwise a category
+                // toggled off only ever affected future scans, not files already queued from
+                // before the toggle was flipped.
+                val enabledCategories = if (categoryFilter == null) settings.enabledCategories.first() else null
+                val total = if (categoryFilter == null) dao.pendingCount() else dao.pendingCountForCategory(categoryFilter)
+                val totalBytes = if (categoryFilter == null) dao.pendingBytes() else dao.pendingBytesForCategory(categoryFilter)
 
                 _progress.value = UploadProgress(
                     phase = BackupPhase.UPLOADING,
@@ -265,7 +273,9 @@ class BackupRepository private constructor(private val context: Context) {
                     }
                     if (!currentCoroutineContext().isActive) break
 
-                    val batch = nextBatch(order).filter { attempted.add(it.id) }
+                    val batch = nextBatch(order, categoryFilter)
+                        .filter { attempted.add(it.id) }
+                        .filter { enabledCategories == null || it.category in enabledCategories }
                     if (batch.isEmpty()) break
 
                     for (record in batch) {
@@ -324,12 +334,21 @@ class BackupRepository private constructor(private val context: Context) {
         }
     }
 
-    /** Drains whichever end of the queue the user asked for. */
-    private suspend fun nextBatch(order: UploadOrder): List<FileRecord> = when (order) {
-        UploadOrder.OLDEST_FIRST -> dao.nextPendingBatch(BATCH_SIZE)
-        UploadOrder.NEWEST_FIRST -> dao.nextPendingNewest(BATCH_SIZE)
-        UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallest(BATCH_SIZE)
-    }
+    /** Drains whichever end of the queue the user asked for, optionally restricted to one category. */
+    private suspend fun nextBatch(order: UploadOrder, categoryFilter: BackupCategory?): List<FileRecord> =
+        if (categoryFilter == null) {
+            when (order) {
+                UploadOrder.OLDEST_FIRST -> dao.nextPendingBatch(BATCH_SIZE)
+                UploadOrder.NEWEST_FIRST -> dao.nextPendingNewest(BATCH_SIZE)
+                UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallest(BATCH_SIZE)
+            }
+        } else {
+            when (order) {
+                UploadOrder.OLDEST_FIRST -> dao.nextPendingBatchForCategory(categoryFilter, BATCH_SIZE)
+                UploadOrder.NEWEST_FIRST -> dao.nextPendingNewestForCategory(categoryFilter, BATCH_SIZE)
+                UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallestForCategory(categoryFilter, BATCH_SIZE)
+            }
+        }
 
     /**
      * Where this file goes. Read from settings on every run rather than from the row, so changing

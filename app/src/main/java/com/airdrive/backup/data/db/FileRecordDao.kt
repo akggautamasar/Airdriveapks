@@ -50,6 +50,30 @@ interface FileRecordDao {
     @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY sizeBytes ASC LIMIT :limit")
     suspend fun nextPendingSmallest(limit: Int): List<FileRecord>
 
+    @Query(
+        "SELECT * FROM file_records WHERE status = 'PENDING' AND category = :category " +
+        "ORDER BY addedAtMillis ASC LIMIT :limit"
+    )
+    suspend fun nextPendingBatchForCategory(category: BackupCategory, limit: Int): List<FileRecord>
+
+    @Query(
+        "SELECT * FROM file_records WHERE status = 'PENDING' AND category = :category " +
+        "ORDER BY modifiedAtMillis DESC LIMIT :limit"
+    )
+    suspend fun nextPendingNewestForCategory(category: BackupCategory, limit: Int): List<FileRecord>
+
+    @Query(
+        "SELECT * FROM file_records WHERE status = 'PENDING' AND category = :category " +
+        "ORDER BY sizeBytes ASC LIMIT :limit"
+    )
+    suspend fun nextPendingSmallestForCategory(category: BackupCategory, limit: Int): List<FileRecord>
+
+    @Query("SELECT COUNT(*) FROM file_records WHERE status = 'PENDING' AND category = :category")
+    suspend fun pendingCountForCategory(category: BackupCategory): Int
+
+    @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM file_records WHERE status = 'PENDING' AND category = :category")
+    suspend fun pendingBytesForCategory(category: BackupCategory): Long
+
     @Query("SELECT * FROM file_records WHERE status = 'FAILED' ORDER BY uploadedAtMillis DESC")
     fun failedFilesFlow(): Flow<List<FileRecord>>
 

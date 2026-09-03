@@ -594,6 +594,31 @@ class TdClient private constructor(private val appContext: Context) {
     }
 
     /**
+     * Replaces the document attached to an existing message. Used only by the backup manifest,
+     * so repeated checkpoints update one message in place instead of piling up a new document
+     * in Saved Messages every time. Throws if the message no longer exists (e.g. the user
+     * deleted it, or it was never actually sent) — the caller falls back to sending fresh.
+     */
+    suspend fun editMessageDocument(chatId: Long, messageId: Long, localPath: String, caption: String) {
+        val inputDocument = TdApi.InputDocument().apply {
+            document = TdApi.InputFileLocal(localPath)
+            thumbnail = null
+            disableContentTypeDetection = true
+        }
+        val content = TdApi.InputMessageDocument().apply {
+            document = inputDocument
+            this.caption = TdApi.FormattedText(caption, emptyArray())
+        }
+        send(
+            TdApi.EditMessageMedia().apply {
+                this.chatId = chatId
+                this.messageId = messageId
+                inputMessageContent = content
+            }
+        )
+    }
+
+    /**
      * Pins a message so it survives casual "clear chat" actions and stays easy to find by eye
      * — Telegram's own closest equivalent to a "do not delete" label. Used only for the backup
      * manifest; failing to pin (e.g. no pin rights, unlikely in Saved Messages) is non-fatal.

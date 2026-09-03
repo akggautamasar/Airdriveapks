@@ -68,14 +68,41 @@ class ManifestSync(private val context: Context) {
                 "reinstall the app. Deleting it just means a reinstall will re-scan instead " +
                 "of remembering — your uploaded files themselves are unaffected either way."
 
-            val messageId = tdClient.uploadFile(
-                localPath = file.absolutePath,
-                chatId = chatId,
-                caption = caption,
-                sizeBytes = file.length()
-            )
-            runCatching { tdClient.pinMessage(chatId, messageId) }
-                .onFailure { Log.w(tag, "could not pin manifest message: ${it.message}") }
+            // Edit the same message every time rather than sending a fresh one, so Saved
+            // Messages ends up with exactly one manifest document, not one per checkpoint.
+            val cached = settings.manifestLocation.first()
+            var edited = false
+            if (cached != null) {
+                edited = runCatching {
+                    tdClient.editMessageDocument(cached.first, cached.second, file.absolutePath, caption)
+                }.isSuccess
+            }
+
+            if (!edited) {
+                // No cached location (fresh install, or the cached message id is stale) — look
+                // for an existing manifest by search before giving up and sending a new one, so
+                // a reinstall that already restored from an old manifest keeps editing that
+                // same message rather than starting a second one.
+                val existing = runCatching { tdClient.findLatestOwnDocument(MANIFEST_MARKER) }.getOrNull()
+                if (existing != null) {
+                    edited = runCatching {
+                        tdClient.editMessageDocument(chatId, existing.id, file.absolutePath, caption)
+                    }.isSuccess
+                    if (edited) settings.setManifestLocation(chatId, existing.id)
+                }
+            }
+
+            if (!edited) {
+                val messageId = tdClient.uploadFile(
+                    localPath = file.absolutePath,
+                    chatId = chatId,
+                    caption = caption,
+                    sizeBytes = file.length()
+                )
+                settings.setManifestLocation(chatId, messageId)
+                runCatching { tdClient.pinMessage(chatId, messageId) }
+                    .onFailure { Log.w(tag, "could not pin manifest message: ${it.message}") }
+            }
 
             file.delete()
             Log.i(tag, "manifest synced: ${manifest.entryCount} file(s)")
@@ -100,6 +127,8 @@ class ManifestSync(private val context: Context) {
 
             val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER)
                 ?: return@withContext RestoreResult.NoManifestFound
+
+            settings.setManifestLocation(message.chatId, message.id)
 
             val downloaded = tdClient.downloadFile(message)
             val json = readGzipped(File(downloaded.path))

@@ -78,6 +78,12 @@ object Keys {
     val API_ID = intPreferencesKey("telegram_api_id")
     val API_HASH = stringPreferencesKey("telegram_api_hash")
 
+    /** Where the last manifest sync landed, so future syncs edit that one message in place
+     *  instead of sending a new one every time — otherwise Saved Messages fills up with one
+     *  manifest document per checkpoint. */
+    val MANIFEST_CHAT_ID = longPreferencesKey("manifest_chat_id")
+    val MANIFEST_MESSAGE_ID = longPreferencesKey("manifest_message_id")
+
     val DESTINATION_MODE = stringPreferencesKey("destination_mode")
     val SINGLE_CHAT_ID = longPreferencesKey("single_chat_id")
     val NETWORK_POLICY = stringPreferencesKey("network_policy")
@@ -175,6 +181,22 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit {
             it.remove(Keys.API_ID)
             it.remove(Keys.API_HASH)
+        }
+    }
+
+    // ---------------------------------------------------------------- manifest location cache
+
+    /** Null if no manifest has ever been synced from this install, or the id cache was lost. */
+    val manifestLocation: Flow<Pair<Long, Long>?> = context.dataStore.data.map { prefs ->
+        val chatId = prefs[Keys.MANIFEST_CHAT_ID]
+        val messageId = prefs[Keys.MANIFEST_MESSAGE_ID]
+        if (chatId != null && messageId != null && chatId != 0L && messageId != 0L) chatId to messageId else null
+    }
+
+    suspend fun setManifestLocation(chatId: Long, messageId: Long) {
+        context.dataStore.edit {
+            it[Keys.MANIFEST_CHAT_ID] = chatId
+            it[Keys.MANIFEST_MESSAGE_ID] = messageId
         }
     }
 

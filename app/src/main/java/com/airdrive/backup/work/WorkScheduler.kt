@@ -3,12 +3,14 @@ package com.airdrive.backup.work
 import android.content.Context
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
+import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +19,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+
+/** Key BackupWorker reads to restrict a manual run to a single category; absent = every category. */
+const val WORK_INPUT_CATEGORY = "category_filter"
 
 object WorkScheduler {
     private const val MANUAL_WORK_NAME = "airdrive_manual_backup"
@@ -30,17 +35,25 @@ object WorkScheduler {
         scope.launch { runNowAwait(context) }
     }
 
+    /** Same as [runNow] but restricted to one category — the per-category "Upload" buttons. */
+    fun runNowCategory(context: Context, category: BackupCategory) {
+        scope.launch { runNowAwait(context, category) }
+    }
+
     /**
      * Kicks off a manual run under the user's own network policy. The previous version always
      * used NetworkType.CONNECTED, so "Wi-Fi only" was quietly ignored by "Back up now" and people
      * burned mobile data. Charging is deliberately *not* required here: the user asked for it now.
      */
-    suspend fun runNowAwait(context: Context) {
+    suspend fun runNowAwait(context: Context, category: BackupCategory? = null) {
         val policy = SettingsStore(context).networkPolicy.first()
-        val request = OneTimeWorkRequestBuilder<BackupWorker>()
+        val requestBuilder = OneTimeWorkRequestBuilder<BackupWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(networkTypeFor(policy)).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-            .build()
+        if (category != null) {
+            requestBuilder.setInputData(Data.Builder().putString(WORK_INPUT_CATEGORY, category.name).build())
+        }
+        val request = requestBuilder.build()
         // REPLACE, not KEEP: with KEEP a finished-but-still-registered run made "Back up now"
         // silently do nothing, which looked exactly like the app being stuck.
         WorkManager.getInstance(context)
