@@ -50,6 +50,10 @@ object Routes {
 
     const val SEARCH = "search"
     const val GALLERY = "gallery"
+
+    /** One category, filtered by upload state, with real previews where the file type allows it. */
+    const val CATEGORY_DETAIL = "category_detail"
+
     const val MIGRATE = "migrate"
     const val CLEANUP = "cleanup"
 
@@ -129,6 +133,15 @@ fun AppNav(deepLinkRoute: String? = null) {
         composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
         composable(Routes.SEARCH) { SearchScreen(navController) }
         composable(Routes.GALLERY) { GalleryScreen(navController) }
+        composable(
+            route = "${Routes.CATEGORY_DETAIL}/{category}",
+            arguments = listOf(navArgument("category") { type = NavType.StringType })
+        ) { entry ->
+            val categoryName = entry.arguments?.getString("category")
+            val category = com.airdrive.backup.data.db.BackupCategory.values()
+                .find { it.name == categoryName } ?: com.airdrive.backup.data.db.BackupCategory.OTHER_FILES
+            CategoryDetailScreen(navController, category)
+        }
         composable(Routes.MIGRATE) { MigrationScreen(navController) }
         composable(Routes.CLEANUP) { CleanupScreen(navController) }
         composable(Routes.VERIFY) { VerifyScreen(navController) }

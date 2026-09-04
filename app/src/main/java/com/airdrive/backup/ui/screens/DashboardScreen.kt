@@ -1,5 +1,6 @@
 package com.airdrive.backup.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -349,7 +350,12 @@ fun DashboardScreen(nav: NavHostController) {
                     val row: CategoryTotals? = categoryTotals.find { it.category == category }
                     val enabled = category in enabledCategories
                     val categoryPending = (row?.total ?: 0) - (row?.uploaded ?: 0)
-                    Card(modifier = Modifier.padding(6.dp).fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier
+                            .padding(6.dp)
+                            .fillMaxWidth()
+                            .clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") }
+                    ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Row(
                                 horizontalArrangement = Arrangement.SpaceBetween,

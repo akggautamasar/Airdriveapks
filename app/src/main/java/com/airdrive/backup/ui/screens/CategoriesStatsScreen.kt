@@ -1,5 +1,6 @@
 package com.airdrive.backup.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +13,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.data.db.AppDatabase
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.CategoryTotals
@@ -59,7 +61,12 @@ fun CategoriesStatsScreen(nav: NavHostController) {
                 val row: CategoryTotals? = totals.find { it.category == category }
                 val total = row?.total ?: 0
                 val uploaded = row?.uploaded ?: 0
-                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") }
+                ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),

@@ -6,10 +6,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -561,5 +563,291 @@ private fun galleryStatusLine(record: FileRecord): String = when (record.status)
     UploadStatus.FAILED -> "Upload failed — ${record.lastError?.take(80) ?: "no reason recorded"}"
     UploadStatus.SKIPPED -> "Skipped"
     UploadStatus.CANCELLED -> "Cancelled"
+}
+
+/** Enough rows for one category's worth of files without holding the whole table in memory. */
+private const val CATEGORY_DETAIL_LIMIT = 600
+
+/**
+ * One category, drilled into from the dashboard or Categories & Statistics — the "tap a category
+ * to see its actual files, not just a count" request. Photos and videos get the same real-preview
+ * grid as [GalleryScreen] (they share its month grouping and preview dialog); every other category
+ * gets a plain list, since [MediaThumbnails] already returns null for anything that isn't an image
+ * or video and [MediaPreviewDialog] already renders "No preview available" for that case — nothing
+ * new was needed there, just a list row to tap in the first place.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CategoryDetailScreen(nav: NavHostController, category: BackupCategory) {
+    val context = LocalContext.current
+    val dao = remember { AppDatabase.get(context).fileRecordDao() }
+    val repository = remember { BackupRepository.get(context) }
+    val scope = rememberCoroutineScope()
+
+    // "" means All; the other two match FileRecordDao's searchFlow statusName filter exactly.
+    var statusFilter by remember { mutableStateOf("") }
+    var selected by remember { mutableStateOf<FileRecord?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+
+    val files by remember(statusFilter) {
+        dao.searchFlow(
+            query = "", categoryName = category.name, statusName = statusFilter,
+            localStateName = "", folder = "", chatId = 0,
+            minBytes = 0, maxBytes = 0, fromMillis = 0, toMillis = 0,
+            sort = 0, limit = CATEGORY_DETAIL_LIMIT
+        )
+    }.collectAsState(initial = emptyList())
+    val total by remember(statusFilter) {
+        dao.searchCountFlow(
+            query = "", categoryName = category.name, statusName = statusFilter,
+            localStateName = "", folder = "", chatId = 0,
+            minBytes = 0, maxBytes = 0, fromMillis = 0, toMillis = 0
+        )
+    }.collectAsState(initial = 0)
+    val restore by repository.restoreState.collectAsState()
+
+    val showsMedia = category == BackupCategory.PHOTOS || category == BackupCategory.VIDEOS
+    val entries = remember(files, showsMedia) { if (showsMedia) groupByMonth(files) else emptyList() }
+
+    DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(categoryLabel(category)) },
+                navigationIcon = {
+                    IconButton(onClick = { nav.popBackStack() }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(selected = statusFilter == "", onClick = { statusFilter = "" }, label = { Text("All") })
+                FilterChip(
+                    selected = statusFilter == "PENDING",
+                    onClick = { statusFilter = "PENDING" },
+                    label = { Text("Pending") }
+                )
+                FilterChip(
+                    selected = statusFilter == "UPLOADED",
+                    onClick = { statusFilter = "UPLOADED" },
+                    label = { Text("Uploaded") }
+                )
+            }
+
+            Text(
+                if (files.size >= CATEGORY_DETAIL_LIMIT) {
+                    "Newest ${Format.count(files.size)} of ${Format.count(total)}"
+                } else {
+                    "${Format.count(files.size)} of ${Format.count(total)}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+
+            restore?.let { state ->
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    when {
+                        state.error != null -> Text(
+                            "Restore failed: ${state.error}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        state.finishedPath != null -> Text(
+                            "Saved to ${state.finishedPath}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        else -> {
+                            Text("Restoring ${state.fileName}…", style = MaterialTheme.typography.bodySmall)
+                            LinearProgressIndicator(
+                                progress = { state.fraction },
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            message?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            when {
+                files.isEmpty() -> {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        Text(
+                            when (statusFilter) {
+                                "PENDING" -> "Nothing pending in ${categoryLabel(category)}."
+                                "UPLOADED" -> "Nothing uploaded yet in ${categoryLabel(category)}."
+                                else -> "No files found in ${categoryLabel(category)} yet."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(32.dp)
+                        )
+                    }
+                }
+                showsMedia -> {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 104.dp),
+                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(
+                            items = entries,
+                            key = { entry ->
+                                when (entry) {
+                                    is GalleryEntry.MonthHeader -> "header:${entry.label}"
+                                    is GalleryEntry.Media -> "media:${entry.record.id}"
+                                }
+                            },
+                            span = { entry ->
+                                if (entry is GalleryEntry.MonthHeader) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+                            }
+                        ) { entry ->
+                            when (entry) {
+                                is GalleryEntry.MonthHeader -> MonthHeaderRow(entry)
+                                is GalleryEntry.Media -> MediaCell(
+                                    record = entry.record,
+                                    onClick = { selected = entry.record; message = null },
+                                    onDuration = { ms ->
+                                        scope.launch { runCatching { dao.setDuration(entry.record.id, ms) } }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(files, key = { it.id }) { record ->
+                            FileListRow(record = record, onClick = { selected = record; message = null })
+                            Divider()
+                        }
+                        if (files.size >= CATEGORY_DETAIL_LIMIT) {
+                            item {
+                                Text(
+                                    "Showing the newest $CATEGORY_DETAIL_LIMIT — use a status filter to narrow it down.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    selected?.let { record ->
+        MediaPreviewDialog(
+            record = record,
+            busy = busy,
+            onDismiss = { selected = null },
+            onRestore = {
+                busy = true
+                message = null
+                scope.launch {
+                    runCatching { repository.restoreFile(record) }
+                        .onSuccess { message = "Restored ${record.displayName} to ${it.parent}" }
+                        .onFailure { message = "Could not restore it: ${it.message?.take(160)}" }
+                    busy = false
+                    selected = null
+                }
+            },
+            onShare = { openInstead ->
+                busy = true
+                message = null
+                scope.launch {
+                    val staged = Sharing.stage(context, record.localUri(), record.displayName)
+                    if (staged == null) {
+                        message = "That file is not on this phone any more — restore it first."
+                    } else {
+                        val handled = if (openInstead) {
+                            Sharing.open(context, staged, record.displayName)
+                        } else {
+                            Sharing.share(context, staged, record.displayName)
+                        }
+                        if (!handled) message = "No app on this phone can handle that file."
+                    }
+                    busy = false
+                }
+            }
+        )
+    }
+}
+
+/**
+ * One row for a category with no visual preview (PDFs, documents, audio, call recordings, other
+ * files) — the extension badge plus name, size, and date, tap to open the same detail dialog the
+ * gallery grid uses.
+ */
+@Composable
+private fun FileListRow(record: FileRecord, onClick: () -> Unit) {
+    val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                extensionLabel(record.displayName),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(record.displayName, maxLines = 1, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "${Format.bytes(record.sizeBytes)} • ${fmt.format(Date(record.modifiedAtMillis))}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (record.status != UploadStatus.UPLOADED) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (record.status == UploadStatus.FAILED) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+            )
+        }
+    }
 }
 

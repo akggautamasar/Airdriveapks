@@ -109,16 +109,18 @@ interface FileRecordDao {
     @Query(
         "SELECT * FROM file_records " +
         "WHERE (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "AND (:categoryName = '' OR category = :categoryName) " +
         "ORDER BY addedAtMillis DESC LIMIT :limit"
     )
-    fun activityFlow(query: String, limit: Int): Flow<List<FileRecord>>
+    fun activityFlow(query: String, categoryName: String, limit: Int): Flow<List<FileRecord>>
 
     @Query(
         "SELECT * FROM file_records " +
         "WHERE status = :status AND (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "AND (:categoryName = '' OR category = :categoryName) " +
         "ORDER BY addedAtMillis DESC LIMIT :limit"
     )
-    fun activityByStatusFlow(status: UploadStatus, query: String, limit: Int): Flow<List<FileRecord>>
+    fun activityByStatusFlow(status: UploadStatus, query: String, categoryName: String, limit: Int): Flow<List<FileRecord>>
 
     /** Files that can be pulled back out of Telegram: uploaded, and with a message to fetch. */
     @Query(
