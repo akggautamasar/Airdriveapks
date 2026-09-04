@@ -127,9 +127,10 @@ interface FileRecordDao {
         "SELECT * FROM file_records " +
         "WHERE status = 'UPLOADED' AND telegramMessageId IS NOT NULL " +
         "AND (:query = '' OR displayName LIKE '%' || :query || '%') " +
+        "AND (:categoryName = '' OR category = :categoryName) " +
         "ORDER BY uploadedAtMillis DESC LIMIT :limit"
     )
-    fun restorableFlow(query: String, limit: Int): Flow<List<FileRecord>>
+    fun restorableFlow(query: String, categoryName: String, limit: Int): Flow<List<FileRecord>>
 
     /** Paged so the CSV export never holds the whole table in memory. */
     @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' ORDER BY uploadedAtMillis ASC LIMIT :limit OFFSET :offset")

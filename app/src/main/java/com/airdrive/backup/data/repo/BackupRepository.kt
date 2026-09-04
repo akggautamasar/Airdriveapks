@@ -862,7 +862,8 @@ class BackupRepository private constructor(private val context: Context) {
         _restoreState.value = null
     }
 
-    fun restorableFlow(query: String, limit: Int = 200) = dao.restorableFlow(query, limit)
+    fun restorableFlow(query: String, categoryName: String = "", limit: Int = 200) =
+        dao.restorableFlow(query, categoryName, limit)
 
     // --------------------------------------------------- deleted file protection (wishlist item 4)
 
