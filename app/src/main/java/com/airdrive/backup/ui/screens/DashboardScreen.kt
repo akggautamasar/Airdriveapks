@@ -46,7 +46,6 @@ fun DashboardScreen(nav: NavHostController) {
     val lastBackup by db.fileRecordDao().lastBackupTimeFlow().collectAsState(initial = null)
     val categoryTotals by db.fileRecordDao().categoryTotalsFlow().collectAsState(initial = emptyList())
     val destination by settings.destination.collectAsState(initial = null)
-    val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
     val progress by repository.progress.collectAsState()
     val paused by repository.paused.collectAsState()
 
@@ -348,7 +347,6 @@ fun DashboardScreen(nav: NavHostController) {
                 // counts include queued files: an empty grid told the user nothing.
                 items(BackupCategory.values().toList()) { category ->
                     val row: CategoryTotals? = categoryTotals.find { it.category == category }
-                    val enabled = category in enabledCategories
                     val categoryPending = (row?.total ?: 0) - (row?.uploaded ?: 0)
                     Card(
                         modifier = Modifier
@@ -357,24 +355,7 @@ fun DashboardScreen(nav: NavHostController) {
                             .clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") }
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium)
-                                // Unchecking excludes this category from scans and from a plain
-                                // "BACK UP NOW" — the per-category Upload button below still
-                                // works regardless, since tapping it is an explicit choice.
-                                Checkbox(
-                                    checked = enabled,
-                                    onCheckedChange = { checked ->
-                                        val next = if (checked) enabledCategories + category else enabledCategories - category
-                                        scope.launch { settings.setEnabledCategories(next) }
-                                    },
-                                    modifier = Modifier.size(28.dp)
-                                )
-                            }
+                            Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium)
                             Text(
                                 "${row?.uploaded ?: 0}/${row?.total ?: 0} files \u2022 " +
                                     formatBytes(row?.totalBytes ?: 0L),

@@ -1,8 +1,20 @@
 package com.airdrive.backup.ui.nav
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -17,6 +29,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.airdrive.backup.data.prefs.SettingsStore
@@ -70,6 +83,21 @@ object Routes {
     const val FILE_HISTORY = "file_history"
 }
 
+/** The five destinations that keep the bottom bar visible; every other screen hides it. */
+private data class BottomTab(
+    val route: String,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
+
+private val bottomTabs = listOf(
+    BottomTab(Routes.DASHBOARD, "Home", Icons.Filled.Home),
+    BottomTab(Routes.CATEGORIES_STATS, "Files", Icons.Filled.Folder),
+    BottomTab(Routes.RESTORE, "Restore", Icons.Filled.CloudDownload),
+    BottomTab(Routes.ACTIVITY_HISTORY, "Activity", Icons.Filled.History),
+    BottomTab(Routes.BACKUP_SETTINGS, "Settings", Icons.Filled.Settings)
+)
+
 @Composable
 fun AppNav(deepLinkRoute: String? = null) {
     val context = LocalContext.current
@@ -111,46 +139,85 @@ fun AppNav(deepLinkRoute: String? = null) {
         }
     }
 
-    NavHost(navController = navController, startDestination = resolved) {
-        composable(Routes.WELCOME) { WelcomeScreen(navController) }
-        composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
-        composable(Routes.API_CREDENTIALS) { ApiCredentialsScreen(navController) }
-        composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController) }
-        composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
-        composable(Routes.READY) { ReadyScreen(navController) }
-        composable(Routes.DASHBOARD) { DashboardScreen(navController) }
-        composable(Routes.BACKUP_PROGRESS) { BackupProgressScreen(navController) }
-        composable(Routes.ACTIVITY_HISTORY) { ActivityHistoryScreen(navController) }
-        composable(Routes.CATEGORIES_STATS) { CategoriesStatsScreen(navController) }
-        composable(Routes.DESTINATION) { DestinationScreen(navController) }
-        composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
-        composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
-        composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
-        composable(Routes.RESTORE) { RestoreScreen(navController) }
-        composable(Routes.FAILED_UPLOADS) { FailedUploadsScreen(navController) }
-        composable(Routes.ABOUT) { AboutScreen(navController) }
-        composable(Routes.TIMELINE) { BackupTimelineScreen(navController) }
-        composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
-        composable(Routes.SEARCH) { SearchScreen(navController) }
-        composable(Routes.GALLERY) { GalleryScreen(navController) }
-        composable(
-            route = "${Routes.CATEGORY_DETAIL}/{category}",
-            arguments = listOf(navArgument("category") { type = NavType.StringType })
-        ) { entry ->
-            val categoryName = entry.arguments?.getString("category")
-            val category = com.airdrive.backup.data.db.BackupCategory.values()
-                .find { it.name == categoryName } ?: com.airdrive.backup.data.db.BackupCategory.OTHER_FILES
-            CategoryDetailScreen(navController, category)
+    val currentBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = currentBackStackEntry?.destination?.route
+    val showBottomBar = bottomTabs.any { it.route == currentRoute }
+
+    Scaffold(
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar {
+                    for (tab in bottomTabs) {
+                        NavigationBarItem(
+                            selected = currentRoute == tab.route,
+                            onClick = {
+                                if (currentRoute != tab.route) {
+                                    // Standard bottom-nav pattern: each tab keeps its own back
+                                    // stack (restoreState/saveState), and popping up to the graph
+                                    // start avoids piling up duplicate copies of a tab if the
+                                    // user bounces between the same few tabs repeatedly.
+                                    navController.navigate(tab.route) {
+                                        popUpTo(navController.graph.startDestinationId) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                            },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) }
+                        )
+                    }
+                }
+            }
         }
-        composable(Routes.MIGRATE) { MigrationScreen(navController) }
-        composable(Routes.CLEANUP) { CleanupScreen(navController) }
-        composable(Routes.VERIFY) { VerifyScreen(navController) }
-        composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
-        composable(
-            route = "${Routes.RUN_DETAIL}/{runId}",
-            arguments = listOf(navArgument("runId") { type = NavType.LongType })
-        ) { entry ->
-            RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
+    ) { scaffoldPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = resolved,
+            modifier = Modifier.padding(scaffoldPadding)
+        ) {
+            composable(Routes.WELCOME) { WelcomeScreen(navController) }
+            composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
+            composable(Routes.API_CREDENTIALS) { ApiCredentialsScreen(navController) }
+            composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController) }
+            composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
+            composable(Routes.READY) { ReadyScreen(navController) }
+            composable(Routes.DASHBOARD) { DashboardScreen(navController) }
+            composable(Routes.BACKUP_PROGRESS) { BackupProgressScreen(navController) }
+            composable(Routes.ACTIVITY_HISTORY) { ActivityHistoryScreen(navController) }
+            composable(Routes.CATEGORIES_STATS) { CategoriesStatsScreen(navController) }
+            composable(Routes.DESTINATION) { DestinationScreen(navController) }
+            composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
+            composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
+            composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
+            composable(Routes.RESTORE) { RestoreScreen(navController) }
+            composable(Routes.FAILED_UPLOADS) { FailedUploadsScreen(navController) }
+            composable(Routes.ABOUT) { AboutScreen(navController) }
+            composable(Routes.TIMELINE) { BackupTimelineScreen(navController) }
+            composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
+            composable(Routes.SEARCH) { SearchScreen(navController) }
+            composable(Routes.GALLERY) { GalleryScreen(navController) }
+            composable(
+                route = "${Routes.CATEGORY_DETAIL}/{category}",
+                arguments = listOf(navArgument("category") { type = NavType.StringType })
+            ) { entry ->
+                val categoryName = entry.arguments?.getString("category")
+                val category = com.airdrive.backup.data.db.BackupCategory.values()
+                    .find { it.name == categoryName } ?: com.airdrive.backup.data.db.BackupCategory.OTHER_FILES
+                CategoryDetailScreen(navController, category)
+            }
+            composable(Routes.MIGRATE) { MigrationScreen(navController) }
+            composable(Routes.CLEANUP) { CleanupScreen(navController) }
+            composable(Routes.VERIFY) { VerifyScreen(navController) }
+            composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
+            composable(
+                route = "${Routes.RUN_DETAIL}/{runId}",
+                arguments = listOf(navArgument("runId") { type = NavType.LongType })
+            ) { entry ->
+                RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
+            }
         }
     }
 }

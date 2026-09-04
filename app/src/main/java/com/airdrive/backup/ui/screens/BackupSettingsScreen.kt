@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.backup.ManifestSync
+import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
@@ -42,6 +43,7 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
     val autoRetry by settings.autoRetryFailed.collectAsState(initial = true)
     val themeMode by settings.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
+    val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
 
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
@@ -135,6 +137,36 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 valueRange = 1f..24f,
                 steps = 22
             )
+
+            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp))
+            Text("Categories", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Unchecking a category excludes it from scans and from a plain \"Back up now\" run. " +
+                    "The per-category Upload button on the dashboard still works regardless — " +
+                    "tapping it is always an explicit choice.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Column(Modifier.padding(top = 4.dp)) {
+                for (category in BackupCategory.values()) {
+                    val enabled = category in enabledCategories
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = enabled,
+                            onCheckedChange = { checked ->
+                                val next = if (checked) enabledCategories + category else enabledCategories - category
+                                scope.launch { settings.setEnabledCategories(next) }
+                            }
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(categoryLabel(category), style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
 
             Spacer(Modifier.height(16.dp))
             Text("Appearance", style = MaterialTheme.typography.titleMedium)
