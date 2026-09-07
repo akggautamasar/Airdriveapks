@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,10 +32,10 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.*
 import com.airdrive.backup.data.repo.BackupRepository
+import com.airdrive.backup.ui.theme.AirSuccess
 import com.airdrive.backup.util.Format
 import com.airdrive.backup.util.MediaThumbnails
 import com.airdrive.backup.util.Sharing
-import com.airdrive.backup.ui.theme.AirSuccess
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,11 +54,20 @@ fun ReferenceCategoryDetailScreen(nav: NavHostController, category: BackupCatego
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
 
-    val files by remember(statusFilter) {
-        dao.searchFlow("", category.name, statusFilter, "", "", 0, 0, 0, 0, 0, LIMIT)
+    val categoryNames = remember(category) { listOf(category.name) }
+    val files by remember(category, statusFilter) {
+        if (statusFilter == "PENDING") {
+            dao.activityByStatusFlow(UploadStatus.PENDING, "", category.name, LIMIT)
+        } else {
+            dao.galleryFlow(categoryNames, "", statusFilter == "UPLOADED", LIMIT)
+        }
     }.collectAsState(initial = emptyList())
-    val total by remember(statusFilter) {
-        dao.searchCountFlow("", category.name, statusFilter, "", "", 0, 0, 0, 0)
+    val total by remember(category, statusFilter) {
+        if (statusFilter == "PENDING") {
+            kotlinx.coroutines.flow.flowOf(files.size)
+        } else {
+            dao.galleryCountFlow(categoryNames, statusFilter == "UPLOADED")
+        }
     }.collectAsState(initial = 0)
     val restore by repository.restoreState.collectAsState()
     val isMedia = category == BackupCategory.PHOTOS || category == BackupCategory.VIDEOS
@@ -168,10 +178,7 @@ fun ReferenceCategoryDetailScreen(nav: NavHostController, category: BackupCatego
 
 @Composable
 private fun ReferenceChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected, onClick = onClick, label = { Text(label) }, shape = RoundedCornerShape(11.dp),
-        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onSurface, containerColor = MaterialTheme.colorScheme.background, labelColor = MaterialTheme.colorScheme.onSurfaceVariant)
-    )
+    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, shape = RoundedCornerShape(11.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onSurface, containerColor = MaterialTheme.colorScheme.background, labelColor = MaterialTheme.colorScheme.onSurfaceVariant))
 }
 
 private sealed interface RefEntry {
@@ -193,7 +200,7 @@ private fun ReferenceMediaCell(record: FileRecord, onClick: () -> Unit) {
     var bitmap by remember(record.uri) { mutableStateOf(MediaThumbnails.peek(record)) }
     LaunchedEffect(record.uri) { if (bitmap == null) bitmap = MediaThumbnails.load(context, record) }
     Box(Modifier.aspectRatio(1f).clip(RoundedCornerShape(9.dp)).background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)) {
-        bitmap?.let { Image(it.asImageBitmap(), record.displayName, ContentScale.Crop, Modifier.fillMaxSize()) }
+        bitmap?.let { Image(bitmap = it.asImageBitmap(), contentDescription = record.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
             ?: Text(extensionLabel(record.displayName), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.Center))
         Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(9.dp).clip(CircleShape).background(if (record.status == UploadStatus.UPLOADED) AirSuccess else MaterialTheme.colorScheme.error))
         if (record.category == BackupCategory.VIDEOS) Surface(color = Color.Black.copy(alpha = .35f), shape = CircleShape, modifier = Modifier.align(Alignment.Center)) { Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.padding(4.dp).size(23.dp)) }
