@@ -36,6 +36,7 @@ import com.airdrive.backup.data.db.FileRecord
 import com.airdrive.backup.data.db.LocalState
 import com.airdrive.backup.data.db.UploadStatus
 import com.airdrive.backup.data.repo.BackupRepository
+import com.airdrive.backup.ui.theme.AirSuccess
 import com.airdrive.backup.util.Format
 import com.airdrive.backup.util.MediaThumbnails
 import com.airdrive.backup.util.Sharing
@@ -391,17 +392,18 @@ private fun MediaCell(
         }
 
         // A single dot rather than a word: at this size anything longer is unreadable, and the
-        // preview dialog spells the status out.
-        if (record.status != UploadStatus.UPLOADED) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(5.dp)
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.error)
-            )
-        }
+        // preview dialog spells the status out. Green means it's safely in Telegram; red means
+        // it isn't yet (pending, uploading, failed, skipped, or cancelled all read the same here).
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(5.dp)
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(
+                    if (record.status == UploadStatus.UPLOADED) AirSuccess else MaterialTheme.colorScheme.error
+                )
+        )
     }
 }
 
@@ -538,7 +540,7 @@ private fun groupByMonth(files: List<FileRecord>): List<GalleryEntry> {
 }
 
 /** "MP4", or a plain "FILE" when the name carries nothing that looks like an extension. */
-private fun extensionLabel(displayName: String): String {
+internal fun extensionLabel(displayName: String): String {
     val ext = displayName.substringAfterLast('.', "").uppercase(Locale.US)
     return if (ext.isNotEmpty() && ext.length <= 5) ext else "FILE"
 }
@@ -834,20 +836,14 @@ private fun FileListRow(record: FileRecord, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        if (record.status != UploadStatus.UPLOADED) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (record.status == UploadStatus.FAILED) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-            )
-        }
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(
+                    if (record.status == UploadStatus.UPLOADED) AirSuccess else MaterialTheme.colorScheme.error
+                )
+        )
     }
 }
 

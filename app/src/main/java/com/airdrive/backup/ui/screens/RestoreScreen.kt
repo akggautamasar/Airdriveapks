@@ -1,22 +1,29 @@
 package com.airdrive.backup.ui.screens
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.FileRecord
 import com.airdrive.backup.data.repo.BackupRepository
+import com.airdrive.backup.util.MediaThumbnails
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -59,6 +66,10 @@ fun RestoreScreen(nav: NavHostController) {
     }
 
     val allSelected = restorable.isNotEmpty() && selected.size == restorable.size
+
+    // Same cache MediaCell uses in the gallery; freeing it when this screen is left keeps memory
+    // bounded without losing the thumbnails a quick trip back and forth would otherwise re-decode.
+    DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
 
     Scaffold(
         topBar = {
@@ -249,12 +260,46 @@ private fun RestoreRow(
     onToggle: () -> Unit,
     onRestore: () -> Unit
 ) {
+    val context = LocalContext.current
     val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
+    var bitmap by remember(record.uri) { mutableStateOf(MediaThumbnails.peek(record)) }
+
+    // Restorable rows still have their local bytes most of the time (they were just uploaded from
+    // this phone), so the same decoder MediaCell uses in the gallery works here too. A file that's
+    // gone local-side (or isn't a photo/video) just falls back to the extension badge below.
+    LaunchedEffect(record.uri) {
+        if (bitmap == null) bitmap = MediaThumbnails.load(context, record)
+    }
+
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = !busy)
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            val image = bitmap
+            if (image != null) {
+                Image(
+                    bitmap = image.asImageBitmap(),
+                    contentDescription = record.displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    extensionLabel(record.displayName),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(record.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
             Text(
