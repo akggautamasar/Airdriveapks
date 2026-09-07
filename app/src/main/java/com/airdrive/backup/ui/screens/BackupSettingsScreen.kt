@@ -66,6 +66,9 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     var manifestStatus by remember { mutableStateOf<String?>(null) }
     var manifestBusy by remember { mutableStateOf(false) }
+    var networkDialog by remember { mutableStateOf(false) }
+    var scheduleDialog by remember { mutableStateOf(false) }
+    var themeDialog by remember { mutableStateOf(false) }
 
     val autoBackup by settings.autoBackupEnabled.collectAsState(initial = true)
     val networkPolicy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
@@ -83,26 +86,16 @@ fun BackupSettingsScreen(nav: NavHostController) {
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
     fun reschedule() = scope.launch { WorkScheduler.rescheduleAutoBackup(context) }
 
-    Scaffold(
-        containerColor = Page,
-        topBar = {
-            TopAppBar(
-                title = { Text("Backup Settings", fontWeight = FontWeight.Bold) },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Page)
-            )
-        }
-    ) { padding ->
+    Scaffold(containerColor = Page, topBar = {
+        TopAppBar(title = { Text("Backup Settings", fontWeight = FontWeight.Bold) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Page))
+    }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SettingHero(autoBackup)
-
             SectionLabel("Automatic backup")
             ModernSettingCard {
-                SettingSwitchRow(Icons.Default.SettingsBackupRestore, Blue, BlueLight, "Automatic backup", "Keep your files safe automatically", autoBackup) {
-                    scope.launch { settings.setAutoBackupEnabled(it) }; reschedule()
-                }
+                SettingSwitchRow(Icons.Default.SettingsBackupRestore, Blue, BlueLight, "Automatic backup", "Keep your files safe automatically", autoBackup) { scope.launch { settings.setAutoBackupEnabled(it) }; reschedule() }
                 Divider()
-                SettingLinkRow(Icons.Default.NetworkWifi, Blue, BlueLight, "Upload over", networkLabel(networkPolicy)) { NetworkPolicyDialog(networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule() } }
+                SettingLinkRow(Icons.Default.NetworkWifi, Blue, BlueLight, "Upload over", networkLabel(networkPolicy)) { networkDialog = true }
                 SettingSwitchRow(Icons.Default.BatteryChargingFull, Green, GreenLight, "Charging only", "Only back up while charging", chargingOnly) { scope.launch { settings.setChargingOnly(it) }; reschedule() }
                 SettingSwitchRow(Icons.Default.Lightbulb, Green, GreenLight, "Battery-conscious mode", "Pause backup when battery is low", batteryConscious) { scope.launch { settings.setBatteryConscious(it) }; reschedule() }
                 SettingSwitchRow(Icons.Default.Refresh, Orange, OrangeLight, "Retry failed files", "Automatically retry failed uploads", autoRetry) { scope.launch { settings.setAutoRetryFailed(it) } }
@@ -110,8 +103,8 @@ fun BackupSettingsScreen(nav: NavHostController) {
 
             SectionLabel("Schedule & limits")
             ModernSettingCard {
-                SettingLinkRow(Icons.Default.Schedule, Blue, BlueLight, "Backup schedule", "Every ${frequency} hours") { ScheduleDialog(frequency) { scope.launch { settings.setBackupFrequencyHours(it) }; reschedule() } }
-                SettingLinkRow(Icons.Default.Bolt, Purple, PurpleLight, "File size limit", if (includeSmall) "No size exclusions" else "Default") { scope.launch { settings.setIncludeSmallFiles(!includeSmall) } }
+                SettingLinkRow(Icons.Default.Schedule, Blue, BlueLight, "Backup schedule", "Every ${frequency} hours") { scheduleDialog = true }
+                SettingLinkRow(Icons.Default.Bolt, Purple, PurpleLight, "Small files", if (includeSmall) "Included" else "Excluded") { scope.launch { settings.setIncludeSmallFiles(!includeSmall) } }
                 Slider(value = frequency.toFloat(), onValueChange = { scope.launch { settings.setBackupFrequencyHours(it.toLong().coerceIn(1L, 24L)) } }, onValueChangeFinished = { reschedule() }, valueRange = 1f..24f, steps = 22, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp), colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue))
             }
 
@@ -128,10 +121,7 @@ fun BackupSettingsScreen(nav: NavHostController) {
             ModernSettingCard {
                 for (category in BackupCategory.values()) {
                     val enabled = category in enabledCategories
-                    CategoryToggle(category, enabled) { checked ->
-                        val next = if (checked) enabledCategories + category else enabledCategories - category
-                        scope.launch { settings.setEnabledCategories(next) }
-                    }
+                    CategoryToggle(category, enabled) { checked -> val next = if (checked) enabledCategories + category else enabledCategories - category; scope.launch { settings.setEnabledCategories(next) } }
                 }
             }
 
@@ -143,17 +133,13 @@ fun BackupSettingsScreen(nav: NavHostController) {
                     OutlinedButton(onClick = { manifestBusy = true; manifestStatus = null; scope.launch { val ok = repository.syncManifestNow(); manifestStatus = if (ok) "Synced to Telegram." else "Sync failed — check Telegram sign-in."; manifestBusy = false } }, enabled = !manifestBusy, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("Sync now") }
                     OutlinedButton(onClick = { manifestBusy = true; manifestStatus = null; scope.launch { manifestStatus = when (val r = repository.restoreManifestForced()) { is ManifestSync.RestoreResult.Restored -> "Restored ${r.fileCount} file(s)."; ManifestSync.RestoreResult.NoManifestFound -> "No backup data found."; ManifestSync.RestoreResult.NotSignedIn -> "Not signed in to Telegram."; ManifestSync.RestoreResult.NothingToDo -> "Nothing to restore."; is ManifestSync.RestoreResult.Failed -> "Restore failed: ${r.reason}" }; manifestBusy = false } }, enabled = !manifestBusy, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("Restore now") }
                 }
-                if (manifestBusy) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 14.dp), color = Blue)
-                manifestStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (it.startsWith("Sync") || it.startsWith("Restored")) Green else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(14.dp)) }
+                if (manifestBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp), color = Blue)
+                manifestStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(14.dp)) }
             }
 
             SectionLabel("Smart Backup")
             Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = BlueLight), modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SettingIcon(Icons.Default.Lightbulb, Orange, OrangeLight)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text("Smart Backup", fontWeight = FontWeight.Bold, color = Color(0xFF174A9C)); Text("Back up new or changed files first to save time and data.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
+                Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(Icons.Default.Lightbulb, Orange, OrangeLight); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Smart Backup", fontWeight = FontWeight.Bold, color = Color(0xFF174A9C)); Text("Back up new or changed files first to save time and data.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             }
 
             SectionLabel("More")
@@ -162,50 +148,35 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 SettingLinkRow(Icons.Default.Security, Purple, PurpleLight, "Advanced settings", "Scan rules, captions and export") { nav.navigate(Routes.ADVANCED_SETTINGS) }
                 SettingLinkRow(Icons.Default.History, Cyan, CyanLight, "Restore files", "Restore from Telegram") { nav.navigate(Routes.RESTORE) }
             }
-
             ModernSettingCard {
-                SettingLinkRow(Icons.Default.CheckCircle, Green, GreenLight, "Appearance", themeLabel(themeMode)) { ThemeDialog(themeMode) { scope.launch { settings.setThemeMode(it) } } }
+                SettingLinkRow(Icons.Default.CheckCircle, Green, GreenLight, "Appearance", themeLabel(themeMode)) { themeDialog = true }
                 SettingLinkRow(Icons.Default.Description, Blue, BlueLight, "Telegram API keys", "Manage Telegram credentials") { nav.navigate(Routes.API_CREDENTIALS) }
             }
-
             OutlinedButton(onClick = { WorkScheduler.runNow(context) }, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(15.dp)) { Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Run backup now") }
             Spacer(Modifier.height(24.dp))
         }
     }
-}
 
-@Composable private fun SettingHero(enabled: Boolean) {
-    Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = BlueLight), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            SettingIcon(Icons.Default.SettingsBackupRestore, Blue, Color(0xFFD6E7FF))
-            Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Backup Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFF174A9C)); Text(if (enabled) "Automatic backup is enabled" else "Automatic backup is paused", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Box(Modifier.size(10.dp).background(if (enabled) Green else Orange, RoundedCornerShape(50)))
-        }
+    if (networkDialog) {
+        AlertDialog(onDismissRequest = { networkDialog = false }, title = { Text("Upload over") }, text = { Column { NetworkChoice("Wi-Fi only", NetworkPolicy.WIFI_ONLY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }; NetworkChoice("Wi-Fi or mobile data, not roaming", NetworkPolicy.NOT_ROAMING, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }; NetworkChoice("Any connection", NetworkPolicy.ANY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false } } }, confirmButton = {})
+    }
+    if (scheduleDialog) {
+        AlertDialog(onDismissRequest = { scheduleDialog = false }, title = { Text("Backup schedule") }, text = { Column { listOf(1L, 2L, 6L, 12L, 24L).forEach { hours -> Row(Modifier.fillMaxWidth().clickable { scope.launch { settings.setBackupFrequencyHours(hours) }; reschedule(); scheduleDialog = false }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(hours == frequency, null); Text("Every ${hours} hours", Modifier.padding(start = 8.dp)) } } } }, confirmButton = {})
+    }
+    if (themeDialog) {
+        AlertDialog(onDismissRequest = { themeDialog = false }, title = { Text("Theme") }, text = { Column { ThemeChoice("System", ThemeMode.SYSTEM, themeMode) { scope.launch { settings.setThemeMode(it) }; themeDialog = false }; ThemeChoice("Light", ThemeMode.LIGHT, themeMode) { scope.launch { settings.setThemeMode(it) }; themeDialog = false }; ThemeChoice("Dark", ThemeMode.DARK, themeMode) { scope.launch { settings.setThemeMode(it) }; themeDialog = false } } }, confirmButton = {})
     }
 }
 
+@Composable private fun SettingHero(enabled: Boolean) { Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = BlueLight), modifier = Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(Icons.Default.SettingsBackupRestore, Blue, Color(0xFFD6E7FF)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Backup Settings", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFF174A9C)); Text(if (enabled) "Automatic backup is enabled" else "Automatic backup is paused", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } Box(Modifier.size(10.dp).background(if (enabled) Green else Orange, RoundedCornerShape(50))) } } }
 @Composable private fun SectionLabel(text: String) { Text(text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 2.dp, top = 4.dp)) }
-
 @Composable private fun ModernSettingCard(content: @Composable ColumnScope.() -> Unit) { Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(content = content) } }
-
 @Composable private fun SettingIcon(icon: ImageVector, tint: Color, bg: Color) { Box(Modifier.size(44.dp).background(bg, RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = tint, modifier = Modifier.size(23.dp)) } }
-
-@Composable private fun SettingSwitchRow(icon: ImageVector, tint: Color, bg: Color, title: String, subtitle: String, checked: Boolean, onToggle: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(icon, tint, bg); Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked, onToggle) }
-}
-
+@Composable private fun SettingSwitchRow(icon: ImageVector, tint: Color, bg: Color, title: String, subtitle: String, checked: Boolean, onToggle: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(icon, tint, bg); Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked = checked, onCheckedChange = onToggle) } }
 @Composable private fun SettingLinkRow(icon: ImageVector, tint: Color, bg: Color, title: String, subtitle: String, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(12.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(icon, tint, bg); Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-
-@Composable private fun CategoryToggle(category: BackupCategory, checked: Boolean, onToggle: (Boolean) -> Unit) { val (tint, bg) = categoryColors(category); Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(Icons.Default.Description, tint, bg); Spacer(Modifier.width(10.dp)); Text(categoryLabel(category), Modifier.weight(1f), fontWeight = FontWeight.Medium); Checkbox(checked, onToggle) } }
-
+@Composable private fun CategoryToggle(category: BackupCategory, checked: Boolean, onToggle: (Boolean) -> Unit) { val (tint, bg) = categoryColors(category); Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(Icons.Default.Description, tint, bg); Spacer(Modifier.width(10.dp)); Text(categoryLabel(category), Modifier.weight(1f), fontWeight = FontWeight.Medium); Checkbox(checked = checked, onCheckedChange = onToggle) } }
 private fun categoryColors(c: BackupCategory): Pair<Color, Color> = when (c) { BackupCategory.PHOTOS -> Blue to BlueLight; BackupCategory.VIDEOS -> Orange to OrangeLight; BackupCategory.PDFS -> Red to RedLight; BackupCategory.WORD_EXCEL -> Cyan to CyanLight; BackupCategory.AUDIO -> Purple to PurpleLight; BackupCategory.CALL_RECORDINGS -> Color(0xFF18B89C) to Color(0xFFE2F8F1); BackupCategory.OTHER_FILES -> Color(0xFF64748B) to Color(0xFFEFF2F6) }
-
 private fun networkLabel(p: NetworkPolicy) = when (p) { NetworkPolicy.WIFI_ONLY -> "Wi-Fi only"; NetworkPolicy.NOT_ROAMING -> "Wi-Fi or mobile data"; NetworkPolicy.ANY -> "Any connection" }
 private fun themeLabel(t: ThemeMode) = when (t) { ThemeMode.SYSTEM -> "Follow system"; ThemeMode.LIGHT -> "Light"; ThemeMode.DARK -> "Dark" }
-
-@Composable private fun NetworkPolicyDialog(current: NetworkPolicy, onPick: (NetworkPolicy) -> Unit) { var show by remember { mutableStateOf(false) }; if (show) AlertDialog(onDismissRequest = { show = false }, title = { Text("Upload over") }, text = { Column { NetworkPolicyOption("Wi-Fi only", NetworkPolicy.WIFI_ONLY, current) { onPick(it); show = false }; NetworkPolicyOption("Wi-Fi or mobile data, not roaming", NetworkPolicy.NOT_ROAMING, current) { onPick(it); show = false }; NetworkPolicyOption("Any connection", NetworkPolicy.ANY, current) { onPick(it); show = false } } }, confirmButton = {}) }
-@Composable private fun ScheduleDialog(current: Long, onPick: (Long) -> Unit) { var show by remember { mutableStateOf(false) }; if (show) AlertDialog(onDismissRequest = { show = false }, title = { Text("Backup schedule") }, text = { Column { listOf(1L, 2L, 6L, 12L, 24L).forEach { h -> NetworkPolicyOption("Every ${h} hours", if (h == current) NetworkPolicy.ANY else NetworkPolicy.WIFI_ONLY, NetworkPolicy.WIFI_ONLY) { onPick(h); show = false } } } }, confirmButton = {}) }
-@Composable private fun ThemeDialog(current: ThemeMode, onPick: (ThemeMode) -> Unit) { var show by remember { mutableStateOf(false) }; if (show) AlertDialog(onDismissRequest = { show = false }, title = { Text("Theme") }, text = { Column { ThemeModeOption("System", ThemeMode.SYSTEM, current) { onPick(it); show = false }; ThemeModeOption("Light", ThemeMode.LIGHT, current) { onPick(it); show = false }; ThemeModeOption("Dark", ThemeMode.DARK, current) { onPick(it); show = false } } }, confirmButton = {}) }
-
-@Composable private fun NetworkPolicyOption(label: String, option: NetworkPolicy, selected: NetworkPolicy, onPick: (NetworkPolicy) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onPick(option) }.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(option == selected, { onPick(option) }); Text(label, Modifier.padding(start = 4.dp)) } }
-@Composable private fun ThemeModeOption(label: String, option: ThemeMode, selected: ThemeMode, onPick: (ThemeMode) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onPick(option) }.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(option == selected, { onPick(option) }); Text(label, Modifier.padding(start = 4.dp)) } }
+@Composable private fun NetworkChoice(label: String, option: NetworkPolicy, selected: NetworkPolicy, onPick: (NetworkPolicy) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onPick(option) }.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(option == selected, { onPick(option) }); Text(label, Modifier.padding(start = 4.dp)) } }
+@Composable private fun ThemeChoice(label: String, option: ThemeMode, selected: ThemeMode, onPick: (ThemeMode) -> Unit) { Row(Modifier.fillMaxWidth().clickable { onPick(option) }.padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(option == selected, { onPick(option) }); Text(label, Modifier.padding(start = 4.dp)) } }
