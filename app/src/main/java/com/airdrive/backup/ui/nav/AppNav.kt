@@ -53,6 +53,7 @@ object Routes {
     const val PROFILES = "profiles"
     const val VERIFY = "verify"
     const val FILE_HISTORY = "file_history"
+    const val SETTINGS = "settings"
 }
 
 private data class BottomTab(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
@@ -61,7 +62,7 @@ private val bottomTabs = listOf(
     BottomTab(Routes.CATEGORIES_STATS, "Files", Icons.Filled.Folder),
     BottomTab(Routes.RESTORE, "Restore", Icons.Filled.CloudDownload),
     BottomTab(Routes.ACTIVITY_HISTORY, "Activity", Icons.Filled.History),
-    BottomTab(Routes.BACKUP_SETTINGS, "Settings", Icons.Filled.Settings)
+    BottomTab(Routes.SETTINGS, "Settings", Icons.Filled.Settings)
 )
 
 @Composable
@@ -117,6 +118,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
             composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
             composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
+            composable(Routes.SETTINGS) { SettingsOverviewScreen(navController) }
             composable(Routes.RESTORE) { RestoreScreen(navController) }
             composable(Routes.FAILED_UPLOADS) { FailedUploadsScreen(navController) }
             composable(Routes.ABOUT) { AboutScreen(navController) }
