@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
@@ -15,9 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.airdrive.backup.data.db.AppDatabase
-import com.airdrive.backup.data.db.BackupCategory
-import com.airdrive.backup.data.db.CategoryTotals
+import com.airdrive.backup.data.db.*
 import com.airdrive.backup.data.prefs.DestinationMode
 import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
@@ -38,7 +37,6 @@ fun DashboardScreen(nav: NavHostController) {
     val settings = remember { SettingsStore(context) }
     val repository = remember { BackupRepository.get(context) }
     val scope = rememberCoroutineScope()
-
     val uploadedCount by db.fileRecordDao().uploadedCountFlow().collectAsState(initial = 0)
     val pendingCount by db.fileRecordDao().pendingCountFlow().collectAsState(initial = 0)
     val failedCount by db.fileRecordDao().failedCountFlow().collectAsState(initial = 0)
@@ -48,37 +46,12 @@ fun DashboardScreen(nav: NavHostController) {
     val destination by settings.destination.collectAsState(initial = null)
     val progress by repository.progress.collectAsState()
     val paused by repository.paused.collectAsState()
-
-    /** Badge for the menu: files that are only in Telegram now are worth a nudge, not a card. */
     val missingCount by remember { repository.missingCountFlow() }.collectAsState(initial = 0)
-
-    /**
-     * Same idea for cleanup: the menu carries the headline figure so "you can safely free 28.7 GB"
-     * is visible without opening the screen. Summed here rather than in SQL because the same
-     * per-category flow feeds the cleanup screen's own breakdown.
-     */
     val cleanupTotals by remember { repository.cleanupTotalsFlow() }.collectAsState(initial = emptyList())
     val reclaimableBytes = remember(cleanupTotals) { cleanupTotals.sumOf { it.bytes } }
-
-    /**
-     * Verification problems are counted here rather than on the verify screen because the whole
-     * point of the feature is to surface a backup that has quietly gone wrong; a number nobody
-     * sees until they go looking is no better than not checking at all.
-     */
     val verifyProblems by remember { repository.verifyProblemCountFlow() }.collectAsState(initial = 0)
-
-    /** How many files have an older copy still reachable in Telegram. */
     val versionedFiles by remember { repository.versionedFileCountFlow() }.collectAsState(initial = 0)
-
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
-
-    /**
-     * Why an automatic backup is not happening, if it is not happening. WorkManager holds a run
-     * whose constraints are unmet without telling anyone, so a phone that has not been plugged in
-     * for three days looks identical to a phone that is up to date. These three flags plus the
-     * settings below turn that silence into a sentence. Re-read on resume rather than observed:
-     * a charger is a thing the user does, so the answer only needs to be right when they look.
-     */
     val autoBackup by settings.autoBackupEnabled.collectAsState(initial = false)
     val chargingOnly by settings.chargingOnly.collectAsState(initial = false)
     val batteryConscious by settings.batteryConscious.collectAsState(initial = true)
@@ -94,302 +67,152 @@ fun DashboardScreen(nav: NavHostController) {
         unmetered = DeviceState.isUnmetered(context)
     }
 
-    // Order matters: charging is checked first because it is the constraint people actually hit,
-    // and naming two reasons at once helps nobody.
     val waitingFor: String? = when {
         !autoBackup || progress.isRunning -> null
-        chargingOnly && !charging ->
-            "Automatic backups are set to run only while charging, so nothing will upload until " +
-                "the phone is plugged in."
-        batteryConscious && batteryLow ->
-            "Automatic backups are paused while the battery is low. They start again once there " +
-                "is more charge."
-        networkPolicy == NetworkPolicy.WIFI_ONLY && !unmetered ->
-            "Automatic backups are set to Wi-Fi only, and this phone is on mobile data at the " +
-                "moment."
+        chargingOnly && !charging -> "Automatic backups are set to run only while charging."
+        batteryConscious && batteryLow -> "Automatic backups are paused while the battery is low."
+        networkPolicy == NetworkPolicy.WIFI_ONLY && !unmetered -> "Automatic backups are waiting for Wi-Fi."
         else -> null
     }
-
     var menuOpen by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("AirDrive") },
+                title = { Text("AirDrive", fontWeight = FontWeight.SemiBold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 actions = {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                    }
+                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Menu") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(text = { Text("Backup destination") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.DESTINATION)
-                        })
-                        DropdownMenuItem(text = { Text("Channel configuration") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.CHANNEL_CONFIG)
-                        })
-                        DropdownMenuItem(text = { Text("Storage access") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.STORAGE_ACCESS)
-                        })
-                        DropdownMenuItem(text = { Text("Backup settings") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.BACKUP_SETTINGS)
-                        })
-                        DropdownMenuItem(text = { Text("Search backups") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.SEARCH)
-                        })
-                        DropdownMenuItem(text = { Text("Photo gallery") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.GALLERY)
-                        })
-                        DropdownMenuItem(text = { Text("Backup timeline") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.TIMELINE)
-                        })
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (missingCount > 0) "Deleted files ($missingCount)"
-                                    else "Deleted files"
-                                )
-                            },
-                            onClick = { menuOpen = false; nav.navigate(Routes.DELETED_FILES) }
-                        )
-                        DropdownMenuItem(text = { Text("Restore from Telegram") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.RESTORE)
-                        })
-                        DropdownMenuItem(text = { Text("Restore from old device") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.MIGRATE)
-                        })
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (reclaimableBytes > 0) {
-                                        "Storage cleanup (${formatBytes(reclaimableBytes)})"
-                                    } else {
-                                        "Storage cleanup"
-                                    }
-                                )
-                            },
-                            onClick = { menuOpen = false; nav.navigate(Routes.CLEANUP) }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (verifyProblems > 0) "Backup verification ($verifyProblems)"
-                                    else "Backup verification"
-                                )
-                            },
-                            onClick = { menuOpen = false; nav.navigate(Routes.VERIFY) }
-                        )
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (versionedFiles > 0) "File history ($versionedFiles)"
-                                    else "File history"
-                                )
-                            },
-                            onClick = { menuOpen = false; nav.navigate(Routes.FILE_HISTORY) }
-                        )
-                        DropdownMenuItem(text = { Text("Failed uploads") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.FAILED_UPLOADS)
-                        })
-                        DropdownMenuItem(text = { Text("About") }, onClick = {
-                            menuOpen = false; nav.navigate(Routes.ABOUT)
-                        })
+                        DropdownMenuItem({ Text("Backup destination") }, { menuOpen = false; nav.navigate(Routes.DESTINATION) })
+                        DropdownMenuItem({ Text("Channel configuration") }, { menuOpen = false; nav.navigate(Routes.CHANNEL_CONFIG) })
+                        DropdownMenuItem({ Text("Storage access") }, { menuOpen = false; nav.navigate(Routes.STORAGE_ACCESS) })
+                        DropdownMenuItem({ Text("Backup settings") }, { menuOpen = false; nav.navigate(Routes.BACKUP_SETTINGS) })
+                        DropdownMenuItem({ Text("Search backups") }, { menuOpen = false; nav.navigate(Routes.SEARCH) })
+                        DropdownMenuItem({ Text("Photo gallery") }, { menuOpen = false; nav.navigate(Routes.GALLERY) })
+                        DropdownMenuItem({ Text("Backup timeline") }, { menuOpen = false; nav.navigate(Routes.TIMELINE) })
+                        DropdownMenuItem({ Text(if (missingCount > 0) "Deleted files ($missingCount)" else "Deleted files") }, { menuOpen = false; nav.navigate(Routes.DELETED_FILES) })
+                        DropdownMenuItem({ Text("Restore from Telegram") }, { menuOpen = false; nav.navigate(Routes.RESTORE) })
+                        DropdownMenuItem({ Text("Restore from old device") }, { menuOpen = false; nav.navigate(Routes.MIGRATE) })
+                        DropdownMenuItem({ Text(if (reclaimableBytes > 0) "Storage cleanup (${formatBytes(reclaimableBytes)})" else "Storage cleanup") }, { menuOpen = false; nav.navigate(Routes.CLEANUP) })
+                        DropdownMenuItem({ Text(if (verifyProblems > 0) "Backup verification ($verifyProblems)" else "Backup verification") }, { menuOpen = false; nav.navigate(Routes.VERIFY) })
+                        DropdownMenuItem({ Text(if (versionedFiles > 0) "File history ($versionedFiles)" else "File history") }, { menuOpen = false; nav.navigate(Routes.FILE_HISTORY) })
+                        DropdownMenuItem({ Text("Failed uploads") }, { menuOpen = false; nav.navigate(Routes.FAILED_UPLOADS) })
+                        DropdownMenuItem({ Text("About") }, { menuOpen = false; nav.navigate(Routes.ABOUT) })
                     }
                 }
             )
         }
     ) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp)
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 34.dp),
+            verticalArrangement = Arrangement.Top
         ) {
-            Text("Backup Status", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Last backup: ${formatLastBackup(lastBackup)}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(16.dp))
+            Text("Backup Status", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium)
+            Text("Last backup: ${formatLastBackup(lastBackup)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.height(22.dp))
 
             if (!hasAccess) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Storage access is off", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "AirDrive can only see folders you picked by hand.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = { nav.navigate(Routes.STORAGE_ACCESS) }) { Text("Fix this") }
-                    }
-                }
+                NoticeCard("Storage access is off", "Allow AirDrive to scan your files.", "Fix this") { nav.navigate(Routes.STORAGE_ACCESS) }
+                Spacer(Modifier.height(10.dp))
             }
-
-            // Uploads cannot start until there is somewhere to put them, and a silent no-op is
-            // exactly the failure people reported before this card existed.
             if (destination?.needsSetup == true) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("No destination yet", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "Pick Saved Messages for zero setup, or point AirDrive at a channel.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = { nav.navigate(Routes.DESTINATION) }) { Text("Choose") }
-                    }
-                }
+                NoticeCard("No destination yet", "Choose Saved Messages or a channel.", "Choose") { nav.navigate(Routes.DESTINATION) }
+                Spacer(Modifier.height(10.dp))
             }
-
-            // Not an error: the phone is following the rules it was given. The card exists so the
-            // rule is visible, and so "BACK UP NOW still works" is said out loud — that button
-            // deliberately ignores the charging rule, which is not obvious from the outside.
-            waitingFor?.let { reason ->
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Automatic backup is waiting", style = MaterialTheme.typography.titleSmall)
-                        Text(reason, style = MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "BACK UP NOW is not affected — it runs whatever the phone is doing.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { nav.navigate(Routes.BACKUP_SETTINGS) }) {
-                            Text("Backup settings")
-                        }
-                    }
-                }
+            waitingFor?.let {
+                NoticeCard("Automatic backup is waiting", it, "Settings") { nav.navigate(Routes.BACKUP_SETTINGS) }
+                Spacer(Modifier.height(10.dp))
             }
 
             if (progress.isRunning) {
-                LinearProgressIndicator(
-                    progress = { progress.fraction },
-                    modifier = Modifier.fillMaxWidth().height(8.dp)
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "${progress.doneFiles}/${progress.totalFiles} \u2022 ${progress.currentFileName ?: ""}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1
-                )
+                LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth().height(7.dp))
+                Spacer(Modifier.height(7.dp))
+                Text("${progress.doneFiles}/${progress.totalFiles} • ${progress.currentFileName ?: "Uploading files…"}", style = MaterialTheme.typography.bodySmall, maxLines = 1)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(
-                        onClick = { repository.setPaused(!paused) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text(if (paused) "Resume" else "Pause") }
-                    OutlinedButton(
-                        onClick = {
-                            progress.currentFileId?.let { id -> scope.launch { repository.cancelUpload(id) } }
-                        },
-                        enabled = progress.currentFileId != null,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Cancel file") }
-                    OutlinedButton(
-                        onClick = { WorkScheduler.pauseManual(context); repository.setPaused(false) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Stop") }
+                    OutlinedButton(onClick = { repository.setPaused(!paused) }, modifier = Modifier.weight(1f)) { Text(if (paused) "Resume" else "Pause") }
+                    OutlinedButton(onClick = { progress.currentFileId?.let { id -> scope.launch { repository.cancelUpload(id) } } }, enabled = progress.currentFileId != null, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    OutlinedButton(onClick = { WorkScheduler.pauseManual(context); repository.setPaused(false) }, modifier = Modifier.weight(1f)) { Text("Stop") }
                 }
             } else {
                 Button(
                     onClick = { repository.setPaused(false); WorkScheduler.runNow(context); nav.navigate(Routes.BACKUP_PROGRESS) },
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("BACK UP NOW") }
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = RoundedCornerShape(30.dp)
+                ) { Text("BACK UP NOW", fontWeight = FontWeight.Medium) }
             }
+            Spacer(Modifier.height(14.dp))
+            Text(destinationSummary(destination?.mode), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
 
-            Spacer(Modifier.height(8.dp))
-            Text(
-                destinationSummary(destination?.mode),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Spacer(Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                StatTile("Files backed up", uploadedCount.toString(), Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
-                StatTile("Storage uploaded", formatBytes(uploadedBytes), Modifier.weight(1f))
+            Spacer(Modifier.height(22.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(uploadedCount.toString(), "Files backed up", Modifier.weight(1f))
+                StatTile(formatBytes(uploadedBytes), "Storage uploaded", Modifier.weight(1f))
             }
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                StatTile("Pending", pendingCount.toString(), Modifier.weight(1f))
-                Spacer(Modifier.width(8.dp))
-                StatTile("Failed", failedCount.toString(), Modifier.weight(1f))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+                StatTile(pendingCount.toString(), "Pending", Modifier.weight(1f))
+                StatTile(failedCount.toString(), "Failed", Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(24.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("Categories", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
                 TextButton(onClick = { nav.navigate(Routes.CATEGORIES_STATS) }) { Text("View all") }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.weight(1f)
-            ) {
-                // Every category is listed, whether or not anything has uploaded yet, and the
-                // counts include queued files: an empty grid told the user nothing.
+            LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
                 items(BackupCategory.values().toList()) { category ->
                     val row: CategoryTotals? = categoryTotals.find { it.category == category }
-                    val categoryPending = (row?.total ?: 0) - (row?.uploaded ?: 0)
+                    val pending = (row?.total ?: 0) - (row?.uploaded ?: 0)
                     Card(
-                        modifier = Modifier
-                            .padding(6.dp)
-                            .fillMaxWidth()
-                            .clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") }
+                        modifier = Modifier.padding(6.dp).fillMaxWidth().clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") },
+                        shape = RoundedCornerShape(17.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "${row?.uploaded ?: 0}/${row?.total ?: 0} files \u2022 " +
-                                    formatBytes(row?.totalBytes ?: 0L),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.height(8.dp))
+                        Column(Modifier.padding(15.dp)) {
+                            Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                            Text("${row?.uploaded ?: 0}/${row?.total ?: 0} files • ${formatBytes(row?.totalBytes ?: 0L)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(10.dp))
                             OutlinedButton(
-                                onClick = {
-                                    repository.setPaused(false)
-                                    WorkScheduler.runNowCategory(context, category)
-                                    nav.navigate(Routes.BACKUP_PROGRESS)
-                                },
-                                enabled = categoryPending > 0 && !progress.isRunning,
-                                modifier = Modifier.fillMaxWidth().height(36.dp)
-                            ) { Text(if (categoryPending > 0) "Upload ($categoryPending)" else "Up to date") }
+                                onClick = { repository.setPaused(false); WorkScheduler.runNowCategory(context, category); nav.navigate(Routes.BACKUP_PROGRESS) },
+                                enabled = pending > 0 && !progress.isRunning,
+                                modifier = Modifier.fillMaxWidth().height(38.dp),
+                                shape = RoundedCornerShape(20.dp)
+                            ) { Text(if (pending > 0) "Upload ($pending)" else "Up to date") }
                         }
                     }
                 }
             }
 
-            OutlinedButton(
-                onClick = { nav.navigate(Routes.ACTIVITY_HISTORY) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("View Activity") }
+            OutlinedButton(onClick = { nav.navigate(Routes.ACTIVITY_HISTORY) }, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(24.dp)) {
+                Text("View Activity")
+            }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+private fun NoticeCard(title: String, message: String, action: String, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = onClick) { Text(action) }
+        }
+    }
+}
+
+@Composable
+private fun StatTile(value: String, label: String, modifier: Modifier = Modifier) {
+    Card(modifier = modifier, shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -397,8 +220,7 @@ private fun StatTile(label: String, value: String, modifier: Modifier = Modifier
 
 private fun formatLastBackup(millis: Long?): String {
     if (millis == null) return "Never"
-    val fmt = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
-    return fmt.format(Date(millis))
+    return SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(millis))
 }
 
 private fun destinationSummary(mode: DestinationMode?): String = when (mode) {
