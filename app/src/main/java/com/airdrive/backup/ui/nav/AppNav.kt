@@ -37,6 +37,7 @@ object Routes {
     const val CATEGORIES_STATS = "categories_stats"
     const val DESTINATION = "destination"
     const val CHANNEL_CONFIG = "channel_config"
+    const val TELEGRAM_SETTINGS = "telegram_settings"
     const val BACKUP_SETTINGS = "backup_settings"
     const val ADVANCED_SETTINGS = "advanced_settings"
     const val RESTORE = "restore"
@@ -116,6 +117,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.CATEGORIES_STATS) { CategoriesStatsScreen(navController) }
             composable(Routes.DESTINATION) { DestinationScreen(navController) }
             composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
+            composable(Routes.TELEGRAM_SETTINGS) { TelegramSettingsScreen(navController) }
             composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
             composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
             composable(Routes.SETTINGS) { SettingsOverviewScreen(navController) }
