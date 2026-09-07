@@ -242,12 +242,6 @@ private fun ActivityRow(
     }
 }
 
-/** "MP4", or a plain "FILE" when the name carries nothing that looks like an extension. */
-private fun extensionLabel(displayName: String): String {
-    val ext = displayName.substringAfterLast('.', "").uppercase(Locale.US)
-    return if (ext.isNotEmpty() && ext.length <= 5) ext else "FILE"
-}
-
 private fun statusLabel(status: UploadStatus): String = when (status) {
     UploadStatus.UPLOADED -> "Uploaded"
     UploadStatus.FAILED -> "Failed"
