@@ -42,53 +42,27 @@ fun ActivityHistoryScreen(nav: NavHostController) {
         if (filter == null) dao.activityFlow(q, category, LIMIT) else dao.activityByStatusFlow(filter!!, q, category, LIMIT)
     }.collectAsState(initial = emptyList())
     DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Activity") },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
-            )
-        }
-    ) { padding ->
+    Scaffold(topBar = {
+        TopAppBar(title = { Text("Activity") }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
+    }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(value = query, onValueChange = { query = it }, placeholder = { Text("Search by file name") }, singleLine = true, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 28.dp))
             Spacer(Modifier.height(12.dp))
-            FilterRow {
-                ReferenceFilterChip("All categories", categoryFilter == null) { categoryFilter = null }
-                BackupCategory.values().forEach { category ->
-                    Spacer(Modifier.width(10.dp)); ReferenceFilterChip(categoryLabel(category), categoryFilter == category) { categoryFilter = if (categoryFilter == category) null else category }
-                }
-            }
+            FilterRow { ReferenceFilterChip("All categories", categoryFilter == null) { categoryFilter = null }; BackupCategory.values().forEach { category -> Spacer(Modifier.width(10.dp)); ReferenceFilterChip(categoryLabel(category), categoryFilter == category) { categoryFilter = if (categoryFilter == category) null else category } } }
             Spacer(Modifier.height(8.dp))
-            FilterRow {
-                ReferenceFilterChip("All", filter == null) { filter = null }
-                UploadStatus.values().forEach { status ->
-                    Spacer(Modifier.width(10.dp)); ReferenceFilterChip(statusLabel(status), filter == status) { filter = if (filter == status) null else status }
-                }
-            }
+            FilterRow { ReferenceFilterChip("All", filter == null) { filter = null }; UploadStatus.values().forEach { status -> Spacer(Modifier.width(10.dp)); ReferenceFilterChip(statusLabel(status), filter == status) { filter = if (filter == status) null else status } } }
             Spacer(Modifier.height(8.dp))
-            if (activity.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nothing matches that.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            } else {
-                LazyColumn(Modifier.fillMaxSize().padding(horizontal = 28.dp)) {
-                    items(activity, key = { it.id }) { record -> ActivityRow(record, repository, scope); HorizontalDivider() }
-                }
-            }
+            if (activity.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Nothing matches that.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            else LazyColumn(Modifier.fillMaxSize().padding(horizontal = 28.dp)) { items(activity, key = { it.id }) { record -> ActivityRow(record, repository, scope); HorizontalDivider() } }
         }
     }
 }
 
 @Composable
-private fun FilterRow(content: @Composable RowScope.() -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically, content = content)
-}
+private fun FilterRow(content: @Composable RowScope.() -> Unit) { Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically, content = content) }
 
 @Composable
-private fun ReferenceFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, shape = RoundedCornerShape(11.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onSurface, containerColor = MaterialTheme.colorScheme.background, labelColor = MaterialTheme.colorScheme.onSurfaceVariant))
-}
+private fun ReferenceFilterChip(label: String, selected: Boolean, onClick: () -> Unit) { FilterChip(selected = selected, onClick = onClick, label = { Text(label) }, shape = RoundedCornerShape(11.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onSurface, containerColor = MaterialTheme.colorScheme.background, labelColor = MaterialTheme.colorScheme.onSurfaceVariant)) }
 
 private const val LIMIT = 300
 
@@ -101,7 +75,7 @@ private fun ActivityRow(record: FileRecord, repository: BackupRepository, scope:
     LaunchedEffect(record.uri, showsThumbnail) { if (showsThumbnail && bitmap == null) bitmap = MediaThumbnails.load(context, record) }
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
-            bitmap?.let { Image(it.asImageBitmap(), record.displayName, ContentScale.Crop, Modifier.fillMaxSize()) }
+            bitmap?.let { Image(bitmap = it.asImageBitmap(), contentDescription = record.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                 ?: Text(extensionLabel(record.displayName), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(12.dp))
@@ -130,11 +104,6 @@ private fun statusLabel(status: UploadStatus): String = when (status) {
 
 @Composable
 private fun StatusChip(status: UploadStatus) {
-    val color = when (status) {
-        UploadStatus.UPLOADED -> MaterialTheme.colorScheme.primary
-        UploadStatus.FAILED -> MaterialTheme.colorScheme.error
-        UploadStatus.UPLOADING -> MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val color = when (status) { UploadStatus.UPLOADED -> MaterialTheme.colorScheme.primary; UploadStatus.FAILED -> MaterialTheme.colorScheme.error; UploadStatus.UPLOADING -> MaterialTheme.colorScheme.tertiary; else -> MaterialTheme.colorScheme.onSurfaceVariant }
     AssistChip(onClick = {}, label = { Text(statusLabel(status), color = color) })
 }
