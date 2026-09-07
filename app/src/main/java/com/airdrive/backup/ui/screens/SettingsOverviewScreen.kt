@@ -72,7 +72,7 @@ fun SettingsOverviewScreen(nav: NavHostController) {
             SettingsGroup("Backup") {
                 SettingsRow("Backup", "Automatic backup, network, file types", Icons.Default.Folder, Blue, BlueLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
                 SettingsRow("Storage", "Scan locations, permissions, cleanup", Icons.Default.Folder, Green, GreenLight) { nav.navigate(Routes.STORAGE_ACCESS) }
-                SettingsRow("Telegram", "Channel configuration, connection", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.DESTINATION) }
+                SettingsRow("Telegram", "Channel configuration, connection", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.TELEGRAM_SETTINGS) }
             }
 
             SettingsGroup("Preferences") {
@@ -93,9 +93,7 @@ fun SettingsOverviewScreen(nav: NavHostController) {
 private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
-        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column(content = content)
-        }
+        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(content = content) }
     }
 }
 
