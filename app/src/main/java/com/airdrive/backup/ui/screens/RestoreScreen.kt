@@ -28,22 +28,12 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-/**
- * The other half of a backup: pulling files back out of Telegram onto the phone. Only files this
- * install uploaded are listed, because restoring needs the (chat, message) pair recorded at upload
- * time. Restored files land in Downloads/AirDrive and never overwrite anything.
- *
- * Category filtering and multi-select restore (select individual items or everything currently
- * shown, then restore all of them in one pass) were the two things missing here — everything
- * before could only restore one file at a time with no way to narrow the list by type.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RestoreScreen(nav: NavHostController) {
     val context = LocalContext.current
     val repository = remember { BackupRepository.get(context) }
     val scope = rememberCoroutineScope()
-
     var query by remember { mutableStateOf("") }
     var categoryFilter by remember { mutableStateOf<BackupCategory?>(null) }
     val selected = remember { mutableStateListOf<Long>() }
@@ -51,178 +41,90 @@ fun RestoreScreen(nav: NavHostController) {
     var bulkDone by remember { mutableStateOf(0) }
     var bulkTotal by remember { mutableStateOf(0) }
     var bulkFailed by remember { mutableStateOf(0) }
-
     val restorable by remember(query, categoryFilter) {
         repository.restorableFlow(query.trim(), categoryFilter?.name ?: "")
     }.collectAsState(initial = emptyList())
     val restore by repository.restoreState.collectAsState()
 
-    // The list is filtered by search/category live, so a selection made under one filter can
-    // point at rows no longer visible under another — drop anything that's fallen out of view
-    // rather than silently restoring files the user can no longer see or meant to deselect.
     LaunchedEffect(restorable) {
-        val visible = restorable.map { it.id }.toSet()
-        selected.retainAll(visible)
+        selected.retainAll(restorable.map { it.id }.toSet())
     }
-
     val allSelected = restorable.isNotEmpty() && selected.size == restorable.size
-
-    // Same cache MediaCell uses in the gallery; freeing it when this screen is left keeps memory
-    // bounded without losing the thumbnails a quick trip back and forth would otherwise re-decode.
     DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(if (selected.isEmpty()) "Restore from Telegram" else "${selected.size} selected")
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = { if (selected.isEmpty()) nav.popBackStack() else selected.clear() }
-                    ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
+                title = { Text(if (selected.isEmpty()) "Restore from Telegram" else "${selected.size} selected") },
+                navigationIcon = { IconButton(onClick = { if (selected.isEmpty()) nav.popBackStack() else selected.clear() }) { Icon(Icons.Default.ArrowBack, "Back") } },
                 actions = {
-                    if (restorable.isNotEmpty()) {
-                        TextButton(
-                            onClick = {
-                                if (allSelected) selected.clear() else {
-                                    selected.clear()
-                                    selected.addAll(restorable.map { it.id })
-                                }
-                            }
-                        ) { Text(if (allSelected) "Clear" else "Select all") }
-                    }
-                }
+                    if (restorable.isNotEmpty()) TextButton(onClick = {
+                        if (allSelected) selected.clear() else { selected.clear(); selected.addAll(restorable.map { it.id }) }
+                    }) { Text(if (allSelected) "Clear" else "Select all") }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding)) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                label = { Text("Search uploaded files") },
+                placeholder = { Text("Search uploaded files") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 28.dp)
             )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilterChip(
-                    selected = categoryFilter == null,
-                    onClick = { categoryFilter = null },
-                    label = { Text("All") }
-                )
-                for (category in BackupCategory.values()) {
-                    Spacer(Modifier.width(8.dp))
-                    FilterChip(
-                        selected = categoryFilter == category,
-                        onClick = { categoryFilter = if (categoryFilter == category) null else category },
-                        label = { Text(categoryLabel(category)) }
-                    )
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 28.dp), verticalAlignment = Alignment.CenterVertically) {
+                ReferenceFilterChip("All", categoryFilter == null) { categoryFilter = null }
+                BackupCategory.values().forEach { category ->
+                    Spacer(Modifier.width(10.dp))
+                    ReferenceFilterChip(categoryLabel(category), categoryFilter == category) {
+                        categoryFilter = if (categoryFilter == category) null else category
+                    }
                 }
             }
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(10.dp))
 
             if (bulkRunning) {
-                Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 28.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(Modifier.padding(16.dp)) {
-                        Text(
-                            "Restoring $bulkDone of $bulkTotal" +
-                                if (bulkFailed > 0) " • $bulkFailed failed" else "",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { if (bulkTotal == 0) 0f else bulkDone.toFloat() / bulkTotal.toFloat() },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        restore?.let { state ->
-                            if (state.running) {
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    "Now: ${state.fileName}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
-                            }
-                        }
+                        Text("Restoring $bulkDone of $bulkTotal" + if (bulkFailed > 0) " • $bulkFailed failed" else "")
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(progress = { if (bulkTotal == 0) 0f else bulkDone.toFloat() / bulkTotal }, Modifier.fillMaxWidth())
                     }
                 }
             } else {
                 restore?.let { state ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(state.fileName, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-                            Spacer(Modifier.height(6.dp))
-                            when {
-                                state.error != null -> Text(
-                                    state.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                state.finishedPath != null -> Text(
-                                    "Saved to ${state.finishedPath}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                else -> {
-                                    LinearProgressIndicator(
-                                        progress = { state.fraction },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        "${formatBytes(state.doneBytes)} of ${formatBytes(state.totalBytes)}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                    Card(Modifier.fillMaxWidth().padding(horizontal = 28.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text(state.fileName, maxLines = 1)
+                            if (state.error != null) Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            else if (state.finishedPath != null) Text("Saved to ${state.finishedPath}", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                            else if (state.running) {
+                                Spacer(Modifier.height(6.dp))
+                                LinearProgressIndicator(progress = { state.fraction }, Modifier.fillMaxWidth())
+                                Text("${formatBytes(state.doneBytes)} of ${formatBytes(state.totalBytes)}", style = MaterialTheme.typography.bodySmall)
                             }
-                            if (!state.running) {
-                                TextButton(onClick = { repository.clearRestoreState() }) { Text("Dismiss") }
-                            }
+                            if (!state.running) TextButton(onClick = { repository.clearRestoreState() }) { Text("Dismiss") }
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
 
             if (restorable.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (query.isBlank() && categoryFilter == null) {
-                            "Nothing has been uploaded from this phone yet."
-                        } else {
-                            "No uploaded file matches that."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(if (query.isBlank() && categoryFilter == null) "Nothing has been uploaded from this phone yet." else "No uploaded file matches that.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                return@Column
-            }
-
-            LazyColumn(modifier = Modifier.weight(1f).padding(horizontal = 16.dp)) {
-                items(restorable, key = { it.id }) { record ->
-                    RestoreRow(
-                        record = record,
-                        checked = record.id in selected,
-                        busy = restore?.running == true || bulkRunning,
-                        onToggle = {
-                            if (record.id in selected) selected.remove(record.id) else selected.add(record.id)
-                        },
-                        onRestore = {
-                            scope.launch { runCatching { repository.restoreFile(record) } }
-                        }
-                    )
-                    Divider()
+            } else {
+                LazyColumn(Modifier.weight(1f).padding(horizontal = 28.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)) {
+                    items(restorable, key = { it.id }) { record ->
+                        RestoreRow(record, record.id in selected, restore?.running == true || bulkRunning,
+                            { if (record.id in selected) selected.remove(record.id) else selected.add(record.id) },
+                            { scope.launch { runCatching { repository.restoreFile(record) } } })
+                        HorizontalDivider()
+                    }
                 }
             }
 
@@ -230,22 +132,14 @@ fun RestoreScreen(nav: NavHostController) {
                 Button(
                     onClick = {
                         val targets = restorable.filter { it.id in selected }
-                        bulkRunning = true
-                        bulkDone = 0
-                        bulkFailed = 0
-                        bulkTotal = targets.size
+                        bulkRunning = true; bulkDone = 0; bulkFailed = 0; bulkTotal = targets.size
                         scope.launch {
-                            for (record in targets) {
-                                runCatching { repository.restoreFile(record) }
-                                    .onFailure { bulkFailed++ }
-                                bulkDone++
-                            }
-                            bulkRunning = false
-                            selected.clear()
+                            for (record in targets) { runCatching { repository.restoreFile(record) }.onFailure { bulkFailed++ }; bulkDone++ }
+                            bulkRunning = false; selected.clear()
                         }
                     },
                     enabled = !bulkRunning && restore?.running != true,
-                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp)
+                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp), shape = RoundedCornerShape(28.dp)
                 ) { Text("Restore ${selected.size} selected") }
             }
         }
@@ -253,63 +147,44 @@ fun RestoreScreen(nav: NavHostController) {
 }
 
 @Composable
-private fun RestoreRow(
-    record: FileRecord,
-    checked: Boolean,
-    busy: Boolean,
-    onToggle: () -> Unit,
-    onRestore: () -> Unit
-) {
+private fun ReferenceFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        shape = RoundedCornerShape(11.dp),
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+            containerColor = MaterialTheme.colorScheme.background,
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = MaterialTheme.colorScheme.outline,
+            selectedBorderColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    )
+}
+
+@Composable
+private fun RestoreRow(record: FileRecord, checked: Boolean, busy: Boolean, onToggle: () -> Unit, onRestore: () -> Unit) {
     val context = LocalContext.current
     val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
     var bitmap by remember(record.uri) { mutableStateOf(MediaThumbnails.peek(record)) }
-
-    // Restorable rows still have their local bytes most of the time (they were just uploaded from
-    // this phone), so the same decoder MediaCell uses in the gallery works here too. A file that's
-    // gone local-side (or isn't a photo/video) just falls back to the extension badge below.
-    LaunchedEffect(record.uri) {
-        if (bitmap == null) bitmap = MediaThumbnails.load(context, record)
-    }
-
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+    LaunchedEffect(record.uri) { if (bitmap == null) bitmap = MediaThumbnails.load(context, record) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = !busy)
-        Box(
-            modifier = Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
-        ) {
-            val image = bitmap
-            if (image != null) {
-                Image(
-                    bitmap = image.asImageBitmap(),
-                    contentDescription = record.displayName,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(
-                    extensionLabel(record.displayName),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        Box(Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+            bitmap?.let { Image(it.asImageBitmap(), record.displayName, ContentScale.Crop, Modifier.fillMaxSize()) }
+                ?: Text(extensionLabel(record.displayName), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+        Column(Modifier.weight(1f)) {
             Text(record.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-            Text(
-                "${formatBytes(record.sizeBytes)} • " +
-                    (record.uploadedAtMillis?.let { fmt.format(Date(it)) } ?: "uploaded"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("${formatBytes(record.sizeBytes)} • ${record.uploadedAtMillis?.let { fmt.format(Date(it)) } ?: "uploaded"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.width(8.dp))
         TextButton(onClick = onRestore, enabled = !busy) { Text("Restore") }
     }
 }
