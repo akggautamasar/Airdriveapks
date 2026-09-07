@@ -100,14 +100,12 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 SettingSwitchRow(Icons.Default.Lightbulb, Green, GreenLight, "Battery-conscious mode", "Pause backup when battery is low", batteryConscious) { scope.launch { settings.setBatteryConscious(it) }; reschedule() }
                 SettingSwitchRow(Icons.Default.Refresh, Orange, OrangeLight, "Retry failed files", "Automatically retry failed uploads", autoRetry) { scope.launch { settings.setAutoRetryFailed(it) } }
             }
-
             SectionLabel("Schedule & limits")
             ModernSettingCard {
                 SettingLinkRow(Icons.Default.Schedule, Blue, BlueLight, "Backup schedule", "Every ${frequency} hours") { scheduleDialog = true }
                 SettingLinkRow(Icons.Default.Bolt, Purple, PurpleLight, "Small files", if (includeSmall) "Included" else "Excluded") { scope.launch { settings.setIncludeSmallFiles(!includeSmall) } }
                 Slider(value = frequency.toFloat(), onValueChange = { scope.launch { settings.setBackupFrequencyHours(it.toLong().coerceIn(1L, 24L)) } }, onValueChangeFinished = { reschedule() }, valueRange = 1f..24f, steps = 22, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp), colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue))
             }
-
             SectionLabel("Storage")
             ModernSettingCard {
                 SettingSwitchRow(Icons.Default.Storage, Cyan, CyanLight, "Scan every folder", "Find files across your device", wholeDevice) { scope.launch { settings.setScanWholeDevice(it) } }
@@ -116,7 +114,6 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 Text(if (hasAccess) StorageAccess.describeRoots(context, includeSdCard) else "All files access is off — only selected folders can be scanned.", style = MaterialTheme.typography.bodySmall, color = if (hasAccess) MaterialTheme.colorScheme.onSurfaceVariant else Red, modifier = Modifier.padding(14.dp, 10.dp))
                 TextButton(onClick = { nav.navigate(Routes.STORAGE_ACCESS) }, modifier = Modifier.padding(horizontal = 8.dp)) { Text("Manage storage access", color = Blue) }
             }
-
             SectionLabel("Include file types")
             ModernSettingCard {
                 for (category in BackupCategory.values()) {
@@ -124,7 +121,6 @@ fun BackupSettingsScreen(nav: NavHostController) {
                     CategoryToggle(category, enabled) { checked -> val next = if (checked) enabledCategories + category else enabledCategories - category; scope.launch { settings.setEnabledCategories(next) } }
                 }
             }
-
             SectionLabel("Backup data on Telegram")
             ModernSettingCard {
                 SettingLinkRow(Icons.Default.CloudUpload, Blue, BlueLight, "Manifest backup", "Keeps backup history on Telegram") { }
@@ -136,12 +132,10 @@ fun BackupSettingsScreen(nav: NavHostController) {
                 if (manifestBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp), color = Blue)
                 manifestStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(14.dp)) }
             }
-
             SectionLabel("Smart Backup")
             Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = BlueLight), modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { SettingIcon(Icons.Default.Lightbulb, Orange, OrangeLight); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Smart Backup", fontWeight = FontWeight.Bold, color = Color(0xFF174A9C)); Text("Back up new or changed files first to save time and data.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
             }
-
             SectionLabel("More")
             ModernSettingCard {
                 SettingLinkRow(Icons.Default.Storage, Blue, BlueLight, "Backup destination", "Saved Messages or channel") { nav.navigate(Routes.DESTINATION) }
@@ -156,7 +150,6 @@ fun BackupSettingsScreen(nav: NavHostController) {
             Spacer(Modifier.height(24.dp))
         }
     }
-
     if (networkDialog) {
         AlertDialog(onDismissRequest = { networkDialog = false }, title = { Text("Upload over") }, text = { Column { NetworkChoice("Wi-Fi only", NetworkPolicy.WIFI_ONLY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }; NetworkChoice("Wi-Fi or mobile data, not roaming", NetworkPolicy.NOT_ROAMING, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }; NetworkChoice("Any connection", NetworkPolicy.ANY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false } } }, confirmButton = {})
     }
