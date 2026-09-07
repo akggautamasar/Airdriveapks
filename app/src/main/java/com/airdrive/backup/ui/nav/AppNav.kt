@@ -29,6 +29,7 @@ object Routes {
     const val TELEGRAM_LOGIN = "telegram_login"
     const val API_CREDENTIALS = "api_credentials"
     const val STORAGE_ACCESS = "storage_access"
+    const val STORAGE_ACCESS_ONBOARDING = "storage_access_onboarding"
     const val FOLDER_SELECT = "folder_select"
     const val READY = "ready"
     const val DASHBOARD = "dashboard"
@@ -75,7 +76,11 @@ fun AppNav(deepLinkRoute: String? = null) {
 
     LaunchedEffect(Unit) {
         kotlinx.coroutines.flow.combine(settings.onboardingDone, settings.telegramLoggedIn) { done, loggedIn -> done to loggedIn }.collect { (done, loggedIn) ->
-            if (startDestination == null) startDestination = when { !done -> Routes.WELCOME; !loggedIn -> Routes.TELEGRAM_LOGIN; else -> Routes.DASHBOARD }
+            if (startDestination == null) startDestination = when {
+                !done -> Routes.WELCOME
+                !loggedIn -> Routes.TELEGRAM_LOGIN
+                else -> Routes.DASHBOARD
+            }
         }
     }
     val resolved = startDestination
@@ -83,7 +88,11 @@ fun AppNav(deepLinkRoute: String? = null) {
         Surface(Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         return
     }
-    LaunchedEffect(resolved, deepLinkRoute) { if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) runCatching { navController.navigate(deepLinkRoute) } }
+    LaunchedEffect(resolved, deepLinkRoute) {
+        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) {
+            runCatching { navController.navigate(deepLinkRoute) }
+        }
+    }
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val showBottomBar = bottomTabs.any { it.route == currentRoute }
@@ -95,10 +104,22 @@ fun AppNav(deepLinkRoute: String? = null) {
                 bottomTabs.forEach { tab ->
                     NavigationBarItem(
                         selected = currentRoute == tab.route,
-                        onClick = { if (currentRoute != tab.route) navController.navigate(tab.route) { popUpTo(navController.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true } },
+                        onClick = {
+                            if (currentRoute != tab.route) navController.navigate(tab.route) {
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
                         icon = { Icon(tab.icon, tab.label) },
                         label = { Text(tab.label) },
-                        colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.onSurface, selectedTextColor = MaterialTheme.colorScheme.onSurface, indicatorColor = AirNavSelected, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant)
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                            indicatorColor = AirNavSelected,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     )
                 }
             }
@@ -108,7 +129,8 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.WELCOME) { WelcomeScreen(navController) }
             composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
             composable(Routes.API_CREDENTIALS) { ApiCredentialsScreen(navController) }
-            composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController) }
+            composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController, onboarding = false) }
+            composable(Routes.STORAGE_ACCESS_ONBOARDING) { StorageAccessScreen(navController, onboarding = true) }
             composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
             composable(Routes.READY) { ReadyScreen(navController) }
             composable(Routes.DASHBOARD) { DashboardScreen(navController) }
@@ -137,7 +159,9 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.CLEANUP) { CleanupScreen(navController) }
             composable(Routes.VERIFY) { VerifyScreen(navController) }
             composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
-            composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry -> RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L) }
+            composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry ->
+                RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
+            }
         }
     }
 }
