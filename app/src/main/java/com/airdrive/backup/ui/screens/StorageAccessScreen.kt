@@ -3,13 +3,32 @@ package com.airdrive.backup.ui.screens
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -23,170 +42,147 @@ import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.StorageAccess
 import kotlinx.coroutines.launch
 
-/**
- * Runs [onResume] every time the screen comes back to the foreground. Needed because "All files
- * access" is granted on a system settings page: the only way to notice the grant is to re-check
- * when the user returns to the app.
- */
+private val StorageBlue = Color(0xFF2F6FEA)
+private val StorageBlueLight = Color(0xFFEAF2FF)
+private val StorageGreen = Color(0xFF18A66A)
+private val StorageGreenLight = Color(0xFFE6F8EF)
+private val StorageCyan = Color(0xFF18B8C8)
+private val StorageCyanLight = Color(0xFFE4F8FA)
+private val StoragePurple = Color(0xFF7C3AED)
+private val StoragePurpleLight = Color(0xFFF0E8FF)
+private val StorageRed = Color(0xFFE5484D)
+private val StorageRedLight = Color(0xFFFFE9E9)
+
 @Composable
 fun OnResumeEffect(onResume: () -> Unit) {
     val owner = LocalLifecycleOwner.current
     val callback by rememberUpdatedState(onResume)
     DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) callback()
-        }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) callback() }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
 }
 
-/**
- * Replaces the old "pick your folders before you may continue" gate. AirDrive now backs up
- * everything under internal storage by default, so this screen only asks for the one permission
- * that makes that possible — and Continue is never blocked.
- */
 @Composable
 fun StorageAccessScreen(nav: NavHostController) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
-
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
-
-    val legacyPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { hasAccess = StorageAccess.hasFullAccess(context) }
-
+    val legacyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasAccess = StorageAccess.hasFullAccess(context) }
     val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
     val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
-    val enabledCategories by settings.enabledCategories
-        .collectAsState(initial = BackupCategory.values().toSet())
+    val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())
-        ) {
-            Text(
-                "Storage access",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "No folder picking. AirDrive walks every folder in internal storage and sends what " +
-                    "it finds to your Telegram channels.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    Scaffold(containerColor = Color(0xFFF7F9FD), topBar = {
+        TopAppBar(
+            title = { Text("Storage Settings", fontWeight = FontWeight.Bold) },
+            navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFFF7F9FD))
+        )
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            StorageCapacityCard(hasAccess, includeSdCard, context)
 
-            Spacer(Modifier.height(20.dp))
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (hasAccess) MaterialTheme.colorScheme.secondaryContainer
-                    else MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        if (hasAccess) "All files access: granted" else "All files access: needed",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        if (hasAccess) {
-                            StorageAccess.describeRoots(context, includeSdCard)
-                        } else if (StorageAccess.grantedFromSettingsScreen) {
-                            "Android only lets you turn this on from Settings. Tap below, then " +
-                                "switch on “Allow access to manage all files” and come back."
-                        } else {
-                            "AirDrive needs permission to read your files."
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    if (!hasAccess) {
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = {
-                            if (StorageAccess.grantedFromSettingsScreen) {
-                                StorageAccess.openAllFilesAccess(context)
-                            } else {
-                                legacyPermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
-                            }
-                        }) { Text("Open permission settings") }
+            SectionTitle("Scan locations")
+            SettingCard {
+                StorageSettingRow(Icons.Default.PhoneAndroid, "Scan internal storage", "Find files on your phone", StorageCyan, StorageCyanLight) {
+                    Switch(checked = wholeDevice, onCheckedChange = { scope.launch { settings.setScanWholeDevice(it) } })
+                }
+                Divider()
+                StorageSettingRow(Icons.Default.Usb, "Scan SD card / USB", "Include removable storage", StorageGreen, StorageGreenLight) {
+                    Switch(checked = includeSdCard, enabled = wholeDevice, onCheckedChange = { scope.launch { settings.setIncludeSdCard(it) } })
+                }
+            }
+
+            SectionTitle("Included folders")
+            ActionCard(Icons.Default.FolderOpen, "Included folders", "${if (wholeDevice) "All folders on internal storage" else "Only selected folders"}", StorageGreen, StorageGreenLight) { nav.navigate(Routes.FOLDER_SELECT) }
+            ActionCard(Icons.Default.Block, "Excluded folders", "Keep private folders out of backup", StorageRed, StorageRedLight) { nav.navigate(Routes.FOLDER_SELECT) }
+
+            SectionTitle("File types")
+            SettingCard {
+                BackupCategory.values().forEachIndexed { index, category ->
+                    val accent = when (category) {
+                        BackupCategory.PHOTOS -> StorageBlue
+                        BackupCategory.VIDEOS -> Color(0xFFF59E0B)
+                        BackupCategory.PDFS -> StorageRed
+                        BackupCategory.WORD_EXCEL -> StorageCyan
+                        BackupCategory.AUDIO -> StoragePurple
+                        BackupCategory.CALL_RECORDINGS -> StorageGreen
+                        BackupCategory.OTHER -> Color(0xFF64748B)
+                    }
+                    val bg = when (category) {
+                        BackupCategory.PHOTOS -> StorageBlueLight
+                        BackupCategory.VIDEOS -> Color(0xFFFFF4DD)
+                        BackupCategory.PDFS -> StorageRedLight
+                        BackupCategory.WORD_EXCEL -> StorageCyanLight
+                        BackupCategory.AUDIO -> StoragePurpleLight
+                        BackupCategory.CALL_RECORDINGS -> StorageGreenLight
+                        BackupCategory.OTHER -> Color(0xFFF1F5F9)
+                    }
+                    StorageSettingRow(Icons.Default.Folder, categoryLabel(category), if (category in enabledCategories) "Included in backup" else "Not included", accent, bg) {
+                        Checkbox(checked = category in enabledCategories, onCheckedChange = { checked ->
+                            val next = if (checked) enabledCategories + category else enabledCategories - category
+                            scope.launch { settings.setEnabledCategories(next) }
+                        })
+                    }
+                    if (index < BackupCategory.values().lastIndex) Divider()
+                }
+            }
+
+            SectionTitle("Storage tools")
+            ActionCard(Icons.Default.CreateNewFolder, "Cleanup assistant", "Find duplicates and unnecessary files", StoragePurple, StoragePurpleLight) { nav.navigate(Routes.CLEANUP) }
+            ActionCard(Icons.Default.Cloud, "Free up space", "Find backed-up files that can be removed", StorageBlue, StorageBlueLight) { nav.navigate(Routes.CLEANUP) }
+
+            if (!hasAccess) {
+                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = StorageRedLight)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("All files access is required", fontWeight = FontWeight.Bold, color = StorageRed)
+                        Spacer(Modifier.height(4.dp))
+                        Text("Allow AirDrive to scan your storage so automatic backup can find your files.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(10.dp))
+                        Button(onClick = { if (StorageAccess.grantedFromSettingsScreen) StorageAccess.openAllFilesAccess(context) else legacyPermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE) }, colors = ButtonDefaults.buttonColors(containerColor = StorageBlue)) { Text("Open permission settings") }
                     }
                 }
             }
-            Spacer(Modifier.height(24.dp))
-            Text("What to scan", style = MaterialTheme.typography.titleMedium)
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Switch(
-                    checked = wholeDevice,
-                    onCheckedChange = { scope.launch { settings.setScanWholeDevice(it) } }
-                )
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Every folder on the phone")
-                    Text(
-                        "Off: only folders you pick by hand",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Switch(
-                    checked = includeSdCard,
-                    onCheckedChange = { scope.launch { settings.setIncludeSdCard(it) } },
-                    enabled = wholeDevice
-                )
-                Spacer(Modifier.width(12.dp))
-                Text("Include SD card / USB storage")
-            }
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+}
 
-            Spacer(Modifier.height(20.dp))
-            Text("File types", style = MaterialTheme.typography.titleMedium)
-            BackupCategory.values().forEach { category ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = category in enabledCategories,
-                        onCheckedChange = { checked ->
-                            val next = if (checked) enabledCategories + category
-                            else enabledCategories - category
-                            scope.launch { settings.setEnabledCategories(next) }
-                        }
-                    )
-                    Text(categoryLabel(category))
-                }
+@Composable private fun StorageCapacityCard(hasAccess: Boolean, includeSd: Boolean, context: android.content.Context) {
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = StorageBlueLight)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(52.dp).clip(RoundedCornerShape(15.dp)).background(Color(0xFFD5E7FF)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Storage, null, tint = StorageBlue, modifier = Modifier.size(27.dp)) }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Internal Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(if (hasAccess) StorageAccess.describeRoots(context, includeSd) else "Permission not granted", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                Spacer(Modifier.height(9.dp))
+                LinearProgressIndicator(progress = { 0.38f }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(5.dp)), color = StorageBlue, trackColor = Color(0xFFD2E1F7))
             }
+        }
+    }
+}
 
-            Spacer(Modifier.height(16.dp))
-            TextButton(onClick = { nav.navigate(Routes.FOLDER_SELECT) }) {
-                Text("Pick specific folders instead (optional)")
-            }
+@Composable private fun SectionTitle(title: String) { Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp)) }
 
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { nav.navigate(Routes.READY) },
-                modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) { Text("Continue") }
-            if (!hasAccess) {
-                Text(
-                    "You can continue without it — AirDrive will only see folders you pick.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-            }
+@Composable private fun SettingCard(content: @Composable ColumnScope.() -> Unit) { Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(Modifier.padding(horizontal = 14.dp), content = content) } }
+
+@Composable private fun StorageSettingRow(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, trailing: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(background), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(22.dp)) }
+        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }; trailing()
+    }
+}
+
+@Composable private fun ActionCard(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(background), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(23.dp)) }
+            Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
