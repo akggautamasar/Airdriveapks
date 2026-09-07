@@ -63,31 +63,67 @@ fun OnResumeEffect(onResume: () -> Unit) {
 }
 
 @Composable
-fun StorageAccessScreen(nav: NavHostController) {
+fun StorageAccessScreen(nav: NavHostController, onboarding: Boolean = false) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
-    val legacyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasAccess = StorageAccess.hasFullAccess(context) }
+    val legacyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        hasAccess = StorageAccess.hasFullAccess(context)
+    }
     val wholeDevice by settings.scanWholeDevice.collectAsState(initial = true)
     val includeSdCard by settings.includeSdCard.collectAsState(initial = true)
     val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
 
-    Scaffold(containerColor = Color(0xFFF7F9FD), topBar = {
-        TopAppBar(title = { Text("Storage Settings", fontWeight = FontWeight.Bold) }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFFF7F9FD)))
-    }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Scaffold(
+        containerColor = Color(0xFFF7F9FD),
+        topBar = {
+            TopAppBar(
+                title = { Text(if (onboarding) "Storage Access" else "Storage Settings", fontWeight = FontWeight.Bold) },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFFF7F9FD))
+            )
+        }
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            if (onboarding) {
+                Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = StorageBlueLight)) {
+                    Column(Modifier.padding(18.dp)) {
+                        Text("Give AirDrive access to your files", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "AirDrive needs storage access to find photos, videos, documents and other files for automatic backup. You can change these choices later in Settings.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             StorageCapacityCard(hasAccess, includeSdCard, context)
             SectionTitle("Scan locations")
             SettingCard {
-                StorageSettingRow(Icons.Default.PhoneAndroid, "Scan internal storage", "Find files on your phone", StorageCyan, StorageCyanLight) { Switch(checked = wholeDevice, onCheckedChange = { scope.launch { settings.setScanWholeDevice(it) } }) }
+                StorageSettingRow(Icons.Default.PhoneAndroid, "Scan internal storage", "Find files on your phone", StorageCyan, StorageCyanLight) {
+                    Switch(checked = wholeDevice, onCheckedChange = { scope.launch { settings.setScanWholeDevice(it) } })
+                }
                 Divider()
-                StorageSettingRow(Icons.Default.Usb, "Scan SD card / USB", "Include removable storage", StorageGreen, StorageGreenLight) { Switch(checked = includeSdCard, enabled = wholeDevice, onCheckedChange = { scope.launch { settings.setIncludeSdCard(it) } }) }
+                StorageSettingRow(Icons.Default.Usb, "Scan SD card / USB", "Include removable storage", StorageGreen, StorageGreenLight) {
+                    Switch(checked = includeSdCard, enabled = wholeDevice, onCheckedChange = { scope.launch { settings.setIncludeSdCard(it) } })
+                }
             }
+
             SectionTitle("Included folders")
-            ActionCard(Icons.Default.FolderOpen, "Included folders", if (wholeDevice) "All folders on internal storage" else "Only selected folders", StorageGreen, StorageGreenLight) { nav.navigate(Routes.FOLDER_SELECT) }
-            ActionCard(Icons.Default.Block, "Excluded folders", "Keep private folders out of backup", StorageRed, StorageRedLight) { nav.navigate(Routes.FOLDER_SELECT) }
+            ActionCard(Icons.Default.FolderOpen, "Included folders", if (wholeDevice) "All folders on internal storage" else "Only selected folders", StorageGreen, StorageGreenLight) {
+                nav.navigate(Routes.FOLDER_SELECT)
+            }
+            ActionCard(Icons.Default.Block, "Excluded folders", "Keep private folders out of backup", StorageRed, StorageRedLight) {
+                nav.navigate(Routes.FOLDER_SELECT)
+            }
+
             SectionTitle("File types")
             SettingCard {
                 BackupCategory.values().forEachIndexed { index, category ->
@@ -109,50 +145,148 @@ fun StorageAccessScreen(nav: NavHostController) {
                         BackupCategory.CALL_RECORDINGS -> StorageGreenLight
                         BackupCategory.OTHER_FILES -> Color(0xFFF1F5F9)
                     }
-                    StorageSettingRow(Icons.Default.Folder, categoryLabel(category), if (category in enabledCategories) "Included in backup" else "Not included", accent, bg) {
-                        Checkbox(checked = category in enabledCategories, onCheckedChange = { checked ->
-                            val next = if (checked) enabledCategories + category else enabledCategories - category
-                            scope.launch { settings.setEnabledCategories(next) }
-                        })
+                    StorageSettingRow(
+                        Icons.Default.Folder,
+                        categoryLabel(category),
+                        if (category in enabledCategories) "Included in backup" else "Not included",
+                        accent,
+                        bg
+                    ) {
+                        Checkbox(
+                            checked = category in enabledCategories,
+                            onCheckedChange = { checked ->
+                                val next = if (checked) enabledCategories + category else enabledCategories - category
+                                scope.launch { settings.setEnabledCategories(next) }
+                            }
+                        )
                     }
                     if (index < BackupCategory.values().lastIndex) Divider()
                 }
             }
+
             SectionTitle("Storage tools")
-            ActionCard(Icons.Default.CreateNewFolder, "Cleanup assistant", "Find duplicates and unnecessary files", StoragePurple, StoragePurpleLight) { nav.navigate(Routes.CLEANUP) }
-            ActionCard(Icons.Default.Cloud, "Free up space", "Find backed-up files that can be removed", StorageBlue, StorageBlueLight) { nav.navigate(Routes.CLEANUP) }
+            ActionCard(Icons.Default.CreateNewFolder, "Cleanup assistant", "Find duplicates and unnecessary files", StoragePurple, StoragePurpleLight) {
+                nav.navigate(Routes.CLEANUP)
+            }
+            ActionCard(Icons.Default.Cloud, "Free up space", "Find backed-up files that can be removed", StorageBlue, StorageBlueLight) {
+                nav.navigate(Routes.CLEANUP)
+            }
+
             if (!hasAccess) {
                 Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = StorageRedLight)) {
                     Column(Modifier.padding(16.dp)) {
                         Text("All files access is required", fontWeight = FontWeight.Bold, color = StorageRed)
                         Spacer(Modifier.height(4.dp))
-                        Text("Allow AirDrive to scan your storage so automatic backup can find your files.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Allow AirDrive to scan your storage so automatic backup can find your files.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(Modifier.height(10.dp))
-                        Button(onClick = { if (StorageAccess.grantedFromSettingsScreen) StorageAccess.openAllFilesAccess(context) else legacyPermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE) }, colors = ButtonDefaults.buttonColors(containerColor = StorageBlue)) { Text("Open permission settings") }
+                        Button(
+                            onClick = {
+                                if (StorageAccess.grantedFromSettingsScreen) StorageAccess.openAllFilesAccess(context)
+                                else legacyPermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = StorageBlue)
+                        ) { Text("Open permission settings") }
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
 
-@Composable private fun StorageCapacityCard(hasAccess: Boolean, includeSd: Boolean, context: android.content.Context) {
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = StorageBlueLight)) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(52.dp).clip(RoundedCornerShape(15.dp)).background(Color(0xFFD5E7FF)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Storage, null, tint = StorageBlue, modifier = Modifier.size(27.dp)) }
-            Spacer(Modifier.width(13.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Internal Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(if (hasAccess) StorageAccess.describeRoots(context, includeSd) else "Permission not granted", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-                Spacer(Modifier.height(9.dp))
-                LinearProgressIndicator(progress = { 0.38f }, modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(5.dp)), color = StorageBlue, trackColor = Color(0xFFD2E1F7))
+            if (onboarding) {
+                Button(
+                    onClick = {
+                        nav.navigate(Routes.READY) {
+                            popUpTo(Routes.STORAGE_ACCESS_ONBOARDING) { inclusive = true }
+                        }
+                    },
+                    enabled = hasAccess,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = StorageBlue)
+                ) {
+                    Text("Continue", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.ArrowForward, contentDescription = null)
+                }
+                Text(
+                    if (hasAccess) "Storage access is ready. Continue to scan your files."
+                    else "Grant storage access above to continue.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                )
+            } else {
+                Spacer(Modifier.height(8.dp))
             }
         }
     }
 }
 
-@Composable private fun SectionTitle(title: String) { Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp)) }
-@Composable private fun SettingCard(content: @Composable ColumnScope.() -> Unit) { Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(Modifier.padding(horizontal = 14.dp), content = content) } }
-@Composable private fun StorageSettingRow(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, trailing: @Composable () -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(background), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(22.dp)) }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }; trailing() } }
-@Composable private fun ActionCard(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, onClick: () -> Unit) { Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(background), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(23.dp)) }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+@Composable
+private fun StorageCapacityCard(hasAccess: Boolean, includeSd: Boolean, context: android.content.Context) {
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = StorageBlueLight)) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(52.dp).clip(RoundedCornerShape(15.dp)).background(Color(0xFFD5E7FF)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Storage, null, tint = StorageBlue, modifier = Modifier.size(27.dp))
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Internal Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    if (hasAccess) StorageAccess.describeRoots(context, includeSd) else "Permission not granted",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+                Spacer(Modifier.height(9.dp))
+                LinearProgressIndicator(
+                    progress = { 0.38f },
+                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(5.dp)),
+                    color = StorageBlue,
+                    trackColor = Color(0xFFD2E1F7)
+                )
+            }
+        }
+    }
+}
+
+@Composable private fun SectionTitle(title: String) {
+    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
+}
+
+@Composable private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.padding(horizontal = 14.dp), content = content)
+    }
+}
+
+@Composable private fun StorageSettingRow(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, trailing: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(background), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = accent, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
+        trailing()
+    }
+}
+
+@Composable private fun ActionCard(icon: ImageVector, title: String, subtitle: String, accent: Color, background: Color, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(background), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = accent, modifier = Modifier.size(23.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
