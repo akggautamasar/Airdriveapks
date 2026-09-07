@@ -18,6 +18,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.screens.*
 import com.airdrive.backup.ui.theme.AirNavSelected
@@ -74,7 +75,8 @@ fun AppNav(deepLinkRoute: String? = null) {
             if (startDestination == null) startDestination = when { !done -> Routes.WELCOME; !loggedIn -> Routes.TELEGRAM_LOGIN; else -> Routes.DASHBOARD }
         }
     }
-    val resolved = startDestination ?: run {
+    val resolved = startDestination
+    if (resolved == null) {
         Surface(Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         return
     }
@@ -93,13 +95,7 @@ fun AppNav(deepLinkRoute: String? = null) {
                         onClick = { if (currentRoute != tab.route) navController.navigate(tab.route) { popUpTo(navController.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true } },
                         icon = { Icon(tab.icon, tab.label) },
                         label = { Text(tab.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                            indicatorColor = AirNavSelected,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.onSurface, selectedTextColor = MaterialTheme.colorScheme.onSurface, indicatorColor = AirNavSelected, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
             }
