@@ -44,13 +44,21 @@ import com.airdrive.backup.work.WorkScheduler
 import java.text.SimpleDateFormat
 import java.util.*
 
-private val AirBlue = Color(0xFF1976F3)
-private val AirBlueLight = Color(0xFFEAF3FF)
-private val AirSurface = Color(0xFFF8FAFE)
-private val AirGreen = Color(0xFF16A765)
-private val AirOrange = Color(0xFFFF8A16)
-private val AirRed = Color(0xFFE53935)
+// AirDrive reference palette: blue primary + distinct semantic category/status colors.
+private val AirBlue = Color(0xFF2F6FEA)
+private val AirBlueDark = Color(0xFF174A9C)
+private val AirBlueLight = Color(0xFFEAF2FF)
+private val AirSurface = Color(0xFFF7F9FD)
+private val AirGreen = Color(0xFF20A463)
+private val AirGreenLight = Color(0xFFE5F7EE)
+private val AirOrange = Color(0xFFF59E0B)
+private val AirOrangeLight = Color(0xFFFFF4DD)
+private val AirRed = Color(0xFFE5484D)
+private val AirRedLight = Color(0xFFFFE8E8)
 private val AirPurple = Color(0xFF7C3AED)
+private val AirPurpleLight = Color(0xFFF0E8FF)
+private val AirCyan = Color(0xFF18B8C8)
+private val AirCyanLight = Color(0xFFE2F8FA)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,8 +118,8 @@ fun DashboardScreen(nav: NavHostController) {
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(46.dp).clip(RoundedCornerShape(14.dp)).background(AirBlue), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(29.dp))
+                        Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(AirBlue), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(28.dp))
                         }
                         Spacer(Modifier.width(10.dp))
                         Column {
@@ -122,7 +130,7 @@ fun DashboardScreen(nav: NavHostController) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AirSurface),
                 actions = {
-                    Surface(shape = RoundedCornerShape(22.dp), color = Color(0xFFDDF7EA)) {
+                    Surface(shape = RoundedCornerShape(22.dp), color = AirGreenLight) {
                         Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(8.dp).clip(CircleShape).background(AirGreen))
                             Spacer(Modifier.width(6.dp))
@@ -171,11 +179,16 @@ fun DashboardScreen(nav: NavHostController) {
                 onDetails = { nav.navigate(Routes.BACKUP_PROGRESS) }
             )
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                StatCard(uploadedCount.toString(), "Files backed up", AirGreen, Modifier.weight(1f))
-                StatCard(pendingCount.toString(), "Pending", AirOrange, Modifier.weight(1f))
-                StatCard(failedCount.toString(), "Failed", AirRed, Modifier.weight(1f))
-                StatCard(formatBytes(uploadedBytes), "Storage used", AirPurple, Modifier.weight(1f))
+            // Reference uses a compact 2 x 2 statistics block with strong semantic colors.
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    StatCard(uploadedCount.toString(), "Files backed up", AirGreen, AirGreenLight, Modifier.weight(1f))
+                    StatCard(pendingCount.toString(), "Pending", AirOrange, AirOrangeLight, Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    StatCard(failedCount.toString(), "Failed", AirRed, AirRedLight, Modifier.weight(1f))
+                    StatCard(formatBytes(uploadedBytes), "Storage used", AirPurple, AirPurpleLight, Modifier.weight(1f))
+                }
             }
 
             if (!progress.isRunning) {
@@ -197,10 +210,10 @@ fun DashboardScreen(nav: NavHostController) {
 
             SectionHeader("Categories", "See all") { nav.navigate(Routes.CATEGORIES_STATS) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CategoryCard(BackupCategory.PHOTOS, Icons.Default.Image, AirBlue, categoryTotals, Modifier.weight(1f), nav, repository, context)
-                CategoryCard(BackupCategory.VIDEOS, Icons.Default.VideoLibrary, AirOrange, categoryTotals, Modifier.weight(1f), nav, repository, context)
-                CategoryCard(BackupCategory.DOCUMENTS, Icons.Default.Description, AirBlue, categoryTotals, Modifier.weight(1f), nav, repository, context)
-                CategoryCard(BackupCategory.AUDIO, Icons.Default.AudioFile, AirPurple, categoryTotals, Modifier.weight(1f), nav, repository, context)
+                CategoryCard(BackupCategory.PHOTOS, Icons.Default.Image, AirBlue, AirBlueLight, categoryTotals, Modifier.weight(1f), nav, repository, context)
+                CategoryCard(BackupCategory.VIDEOS, Icons.Default.VideoLibrary, AirOrange, AirOrangeLight, categoryTotals, Modifier.weight(1f), nav, repository, context)
+                CategoryCard(BackupCategory.DOCUMENTS, Icons.Default.Description, AirCyan, AirCyanLight, categoryTotals, Modifier.weight(1f), nav, repository, context)
+                CategoryCard(BackupCategory.AUDIO, Icons.Default.AudioFile, AirPurple, AirPurpleLight, categoryTotals, Modifier.weight(1f), nav, repository, context)
             }
 
             Card(Modifier.fillMaxWidth().clickable { nav.navigate(Routes.DESTINATION) }, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -208,7 +221,7 @@ fun DashboardScreen(nav: NavHostController) {
                     Text("Telegram destination", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(9.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(50.dp).clip(CircleShape).background(Color(0xFFE2F3FF)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Send, null, tint = AirBlue, modifier = Modifier.size(27.dp)) }
+                        Box(Modifier.size(50.dp).clip(CircleShape).background(AirBlueLight), contentAlignment = Alignment.Center) { Icon(Icons.Default.Send, null, tint = AirBlue, modifier = Modifier.size(27.dp)) }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) { Text("AirDrive Backups", fontWeight = FontWeight.SemiBold); Text("${destinationLabel(destination?.mode)} • ${formatBytes(uploadedBytes)} used", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         Icon(Icons.Default.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -219,7 +232,7 @@ fun DashboardScreen(nav: NavHostController) {
             Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = AirBlueLight) {
                 Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFFD6E7FF)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Security, null, tint = AirBlue, modifier = Modifier.size(24.dp)) }
-                    Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text("Your data is safe with Telegram", fontWeight = FontWeight.Bold, color = Color(0xFF1647A3)); Text("Private, encrypted and always accessible.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text("Your data is safe with Telegram", fontWeight = FontWeight.Bold, color = AirBlueDark); Text("Private, encrypted and always accessible.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     TextButton(onClick = { nav.navigate(Routes.ABOUT) }) { Text("Learn more") }
                 }
             }
@@ -232,7 +245,7 @@ fun DashboardScreen(nav: NavHostController) {
 
 @Composable
 private fun BackupHeroCard(title: String, subtitle: String, fraction: Float, doneFiles: Int, totalFiles: Int, doneBytes: Long, totalBytes: Long, paused: Boolean, running: Boolean, onPause: () -> Unit, onResume: () -> Unit, onDetails: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF3FF))) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = AirBlueLight)) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
@@ -253,24 +266,30 @@ private fun BackupHeroCard(title: String, subtitle: String, fraction: Float, don
             }
             Spacer(Modifier.height(13.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                Button(onClick = if (running) if (paused) onResume else onPause else onDetails, Modifier.weight(1f).height(47.dp), shape = RoundedCornerShape(15.dp)) { Text(if (running) if (paused) "Resume backup" else "Pause backup" else "Backup details") }
+                Button(onClick = if (running) if (paused) onResume else onPause else onDetails, Modifier.weight(1f).height(47.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = AirBlue)) { Text(if (running) if (paused) "Resume backup" else "Pause backup" else "Backup details") }
                 OutlinedButton(onClick = onDetails, Modifier.weight(1f).height(47.dp), shape = RoundedCornerShape(15.dp)) { Text("View details"); Spacer(Modifier.width(5.dp)); Icon(Icons.Default.ArrowForward, null, Modifier.size(16.dp)) }
             }
         }
     }
 }
 
-@Composable private fun StatCard(value: String, label: String, accent: Color, modifier: Modifier) {
-    Card(modifier.heightIn(min = 92.dp), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Column(Modifier.fillMaxWidth().padding(9.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) { Box(Modifier.size(9.dp).clip(CircleShape).background(accent)) }
-            Spacer(Modifier.height(4.dp)); Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1); Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+@Composable private fun StatCard(value: String, label: String, accent: Color, iconBackground: Color, modifier: Modifier) {
+    Card(modifier.heightIn(min = 88.dp), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(iconBackground), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color(0xFF182033), maxLines = 1)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+            }
         }
     }
 }
 
 @Composable private fun SectionHeader(title: String, action: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, Modifier.weight(1f)); TextButton(onClick) { Text(action) } }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, Modifier.weight(1f)); TextButton(onClick) { Text(action, color = AirBlue) } }
 }
 
 @Composable private fun CurrentFileCard(name: String, meta: String) {
@@ -287,7 +306,7 @@ private fun BackupHeroCard(title: String, subtitle: String, fraction: Float, don
 }
 
 @Composable
-private fun CategoryCard(category: BackupCategory, icon: ImageVector, accent: Color, totals: List<CategoryTotals>, modifier: Modifier, nav: NavHostController, repository: BackupRepository, context: android.content.Context) {
+private fun CategoryCard(category: BackupCategory, icon: ImageVector, accent: Color, iconBackground: Color, totals: List<CategoryTotals>, modifier: Modifier, nav: NavHostController, repository: BackupRepository, context: android.content.Context) {
     val row = totals.find { it.category == category }
     val total = row?.total ?: 0
     val uploaded = row?.uploaded ?: 0
@@ -295,16 +314,16 @@ private fun CategoryCard(category: BackupCategory, icon: ImageVector, accent: Co
     val progress = if (total > 0) (uploaded.toFloat() / total).coerceIn(0f, 1f) else 0f
     Card(modifier.clickable { nav.navigate("${Routes.CATEGORY_DETAIL}/${category.name}") }, shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
         Column(Modifier.padding(9.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, Modifier.size(23.dp)) }
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(iconBackground), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, Modifier.size(23.dp)) }
             Spacer(Modifier.height(6.dp)); Text(categoryLabel(category), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1); Text("$total files", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant); Text(formatBytes(row?.totalBytes ?: 0L), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
             Spacer(Modifier.height(6.dp)); LinearProgressIndicator(progress = { progress }, Modifier.fillMaxWidth().height(5.dp).clip(CircleShape), color = accent, trackColor = Color(0xFFE4EAF3))
-            TextButton(enabled = pending > 0, onClick = { repository.setPaused(false); WorkScheduler.runNowCategory(context, category); nav.navigate(Routes.BACKUP_PROGRESS) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(29.dp)) { Text(if (pending > 0) "Upload $pending" else "Up to date", style = MaterialTheme.typography.labelSmall) }
+            TextButton(enabled = pending > 0, onClick = { repository.setPaused(false); WorkScheduler.runNowCategory(context, category); nav.navigate(Routes.BACKUP_PROGRESS) }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(29.dp)) { Text(if (pending > 0) "Upload $pending" else "Up to date", style = MaterialTheme.typography.labelSmall, color = accent) }
         }
     }
 }
 
 @Composable private fun NoticeCard(title: String, message: String, action: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; TextButton(onClick) { Text(action) } } }
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; TextButton(onClick) { Text(action, color = AirBlue) } } }
 }
 
 private fun destinationLabel(mode: DestinationMode?): String = when (mode) {
