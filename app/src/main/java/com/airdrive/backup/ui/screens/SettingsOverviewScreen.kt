@@ -43,79 +43,36 @@ private val Background = Color(0xFFF7F9FD)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsOverviewScreen(nav: NavHostController) {
-    Scaffold(
-        containerColor = Background,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Background)
-            )
-        }
-    ) { padding ->
-        Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(15.dp)
-        ) {
+    Scaffold(containerColor = Background, topBar = {
+        TopAppBar(title = { Text("Settings", fontWeight = FontWeight.Bold) }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Background))
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
             Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = BlueLight)) {
                 Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(62.dp).clip(RoundedCornerShape(18.dp)).background(Blue), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(37.dp))
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
+                    Box(Modifier.size(62.dp).clip(RoundedCornerShape(18.dp)).background(Blue), contentAlignment = Alignment.Center) { Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(37.dp)) }
+                    Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) {
                         Text("AirDrive", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Color(0xFF15356F))
-                        Text("v1.0.0 • Build 46", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(5.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(Green))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Backup system ready", style = MaterialTheme.typography.labelMedium, color = Color(0xFF176B47), fontWeight = FontWeight.SemiBold)
-                        }
+                        Text("v1.0.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(5.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(7.dp).clip(CircleShape).background(Green)); Spacer(Modifier.width(6.dp)); Text("Backup system ready", style = MaterialTheme.typography.labelMedium, color = Color(0xFF176B47), fontWeight = FontWeight.SemiBold) }
                     }
                 }
             }
-
             SettingsGroup("Backup") {
-                SettingsRow("Backup", "Automatic backup, network, file types", Icons.Default.Folder, Blue, BlueLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
-                SettingsRow("Storage", "Scan locations, permissions, cleanup", Icons.Default.Folder, Green, GreenLight) { nav.navigate(Routes.STORAGE_ACCESS) }
-                SettingsRow("Telegram", "Connection, destination, channel", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.TELEGRAM_SETTINGS) }
+                SettingsRow("Backup", "Automatic backup, schedule and file types", Icons.Default.Folder, Blue, BlueLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
+                SettingsRow("Storage", "Permissions and scan locations", Icons.Default.Folder, Green, GreenLight) { nav.navigate(Routes.STORAGE_ACCESS) }
+                SettingsRow("Telegram", "Connection and backup destination", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.TELEGRAM_SETTINGS) }
             }
-
             SettingsGroup("Preferences") {
-                SettingsRow("Security & Privacy", "App protection and data controls", Icons.Default.Lock, Orange, OrangeLight) { nav.navigate(Routes.ADVANCED_SETTINGS) }
-                SettingsRow("Notifications", "Backup alerts and progress updates", Icons.Default.Notifications, Purple, PurpleLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
-                SettingsRow("Appearance", "Theme, display and app style", Icons.Default.Palette, Purple, PurpleLight) { nav.navigate(Routes.ADVANCED_SETTINGS) }
-                SettingsRow("Network", "Wi-Fi, mobile data and upload policy", Icons.Default.Wifi, Cyan, CyanLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
+                SettingsRow("Security & Privacy", "Credentials, cloud data and privacy", Icons.Default.Lock, Orange, OrangeLight) { nav.navigate(Routes.SECURITY_PRIVACY) }
+                SettingsRow("Notifications", "Backup progress and failure alerts", Icons.Default.Notifications, Purple, PurpleLight) { nav.navigate(Routes.NOTIFICATIONS) }
+                SettingsRow("Appearance", "Theme", Icons.Default.Palette, Purple, PurpleLight) { nav.navigate(Routes.APPEARANCE) }
+                SettingsRow("Network", "Wi-Fi, mobile data and roaming", Icons.Default.Wifi, Cyan, CyanLight) { nav.navigate(Routes.NETWORK) }
             }
-
-            SettingsGroup("Support") {
-                SettingsRow("About AirDrive", "Version, help, privacy and open source", Icons.Default.Info, Blue, BlueLight) { nav.navigate(Routes.ABOUT) }
-            }
-
+            SettingsGroup("Support") { SettingsRow("About AirDrive", "Version, help, privacy and open source", Icons.Default.Info, Blue, BlueLight) { nav.navigate(Routes.ABOUT) } }
             Text("AirDrive • Your files. Backed up. Always with you.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
 }
 
-@Composable
-private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
-        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(content = content) }
-    }
-}
-
-@Composable
-private fun SettingsRow(title: String, subtitle: String, icon: ImageVector, accent: Color, iconBackground: Color, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(iconBackground), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = accent, modifier = Modifier.size(23.dp))
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-        }
-        Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
+@Composable private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp)); Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) { Column(content = content) } } }
+@Composable private fun SettingsRow(title: String, subtitle: String, icon: ImageVector, accent: Color, iconBackground: Color, onClick: () -> Unit) { Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)).background(iconBackground), contentAlignment = Alignment.Center) { Icon(icon, null, tint = accent, modifier = Modifier.size(23.dp)) }; Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }; Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
