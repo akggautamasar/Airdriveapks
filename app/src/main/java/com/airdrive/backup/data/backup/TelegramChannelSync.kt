@@ -23,14 +23,22 @@ data class ChannelSyncResult(
     val manifestSynced: Boolean
 )
 
-/** Imports the complete real contents of every configured Telegram channel into AirDrive's inventory. */
+/** Imports Telegram contents into Room and reconciles the portable manifest first. */
 class TelegramChannelSync private constructor(private val context: Context) {
     private val dao = AppDatabase.get(context).fileRecordDao()
     private val settings = SettingsStore(context)
     private val tdClient = TdClient.get(context)
+    private val manifestSync = ManifestSync.get(context)
 
     suspend fun syncConfiguredChannels(onProgress: (String) -> Unit = {}): ChannelSyncResult = withContext(Dispatchers.IO) {
         if (!tdClient.awaitReady(45_000)) return@withContext ChannelSyncResult(0, 0, 0, 0, 1, dao.uploadedCount(), false)
+
+        // The manifest can contain older uploads that the local Room database missed. Merge it
+        // before scanning live Telegram history so "already backed up" files become real,
+        // restoreable Room records even when they were uploaded by an older app installation.
+        val manifestImported = manifestSync.reconcileAvailableManifest()
+        if (manifestImported > 0) onProgress("Recovered $manifestImported file(s) from AirDrive manifest")
+
         val destination = settings.destination.first()
         val channels = when (destination.mode) {
             DestinationMode.SAVED_MESSAGES -> listOf(tdClient.savedMessagesChatId())
@@ -38,10 +46,11 @@ class TelegramChannelSync private constructor(private val context: Context) {
             DestinationMode.PER_CATEGORY -> destination.perCategory.values.filter { it != 0L }.distinct()
         }
         var scanned = 0
-        var imported = 0
+        var imported = manifestImported
         var existing = 0
         var failed = 0
         var manifestSynced = false
+
         for ((index, chatId) in channels.withIndex()) {
             try {
                 onProgress("Scanning channel ${index + 1}/${channels.size} • $chatId")
@@ -50,7 +59,10 @@ class TelegramChannelSync private constructor(private val context: Context) {
                 }
                 scanned += channelFiles.size
                 for (remote in channelFiles) {
-                    if (dao.findByTelegramMessage(remote.chatId, remote.messageId) != null) { existing++; continue }
+                    if (dao.findByTelegramMessage(remote.chatId, remote.messageId) != null) {
+                        existing++
+                        continue
+                    }
                     val category = runCatching { BackupCategory.valueOf(remote.categoryName) }.getOrDefault(BackupCategory.OTHER_FILES)
                     val row = FileRecord(
                         uri = "telegram://${remote.chatId}/${remote.messageId}",
@@ -69,16 +81,17 @@ class TelegramChannelSync private constructor(private val context: Context) {
                     if (dao.insert(row) != -1L) imported++ else existing++
                 }
                 onProgress("Channel ${index + 1}/${channels.size} complete • ${channelFiles.size} files • $imported added so far")
-                if (ManifestSync.get(context).sync()) manifestSynced = true
+                if (manifestSync.sync()) manifestSynced = true
             } catch (e: Exception) {
                 failed++
                 onProgress("Channel ${index + 1}/${channels.size} failed • ${e.message ?: "unknown error"}")
             }
         }
-        val finalManifestSynced = ManifestSync.get(context).sync()
+
+        val finalManifestSynced = manifestSync.sync()
         manifestSynced = manifestSynced || finalManifestSynced
         val manifestEntries = dao.uploadedCount()
-        onProgress("Inventory complete • $scanned files found • $imported added • $existing already indexed • $manifestEntries in manifest")
+        onProgress("Inventory complete • $scanned Telegram files found • $imported added/recovered • $existing already indexed • $manifestEntries in manifest")
         ChannelSyncResult(channels.size, scanned, imported, existing, failed, manifestEntries, manifestSynced)
     }
 
