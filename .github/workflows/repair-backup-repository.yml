@@ -40,3 +40,5 @@ jobs:
           git add app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt
           git commit -m 'Fix BackupRepository malformed newline escape'
           git push
+
+# Syntax repair completed; this commit intentionally triggers the normal Build APK workflow.
