@@ -153,7 +153,20 @@ fun ChannelConfigScreen(nav: NavHostController) {
                             ) { Text("Save") }
                             Spacer(Modifier.width(8.dp))
                             TextButton(
-                                onClick = { working = category; scope.launch { try { val created = repository.createChannel("AirDrive ${categoryLabel(category)}"); text = created.chatId.toString(); assign(category, created.chatId, created.title) } catch (e: Exception) { say(e.message ?: "Could not create the channel", true) } finally { working = null } },
+                                onClick = {
+                                    working = category
+                                    scope.launch {
+                                        try {
+                                            val created = repository.createChannel("AirDrive ${categoryLabel(category)}")
+                                            text = created.chatId.toString()
+                                            assign(category, created.chatId, created.title)
+                                        } catch (e: Exception) {
+                                            say(e.message ?: "Could not create the channel", true)
+                                        } finally {
+                                            working = null
+                                        }
+                                    }
+                                },
                                 enabled = working == null && !syncState.running
                             ) { Text("Create") }
                             Spacer(Modifier.width(8.dp))
