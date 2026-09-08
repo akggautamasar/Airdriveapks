@@ -79,12 +79,7 @@ object Routes {
     const val NETWORK = "network"
 }
 
-private data class BottomTab(
-    val route: String,
-    val label: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector
-)
-
+private data class BottomTab(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 private val bottomTabs = listOf(
     BottomTab(Routes.DASHBOARD, "Home", Icons.Filled.Home),
     BottomTab(Routes.CATEGORIES_STATS, "Files", Icons.Filled.Folder),
@@ -99,82 +94,54 @@ fun AppNav(deepLinkRoute: String? = null) {
     val settings = remember { SettingsStore(context) }
     val navController = rememberNavController()
     var startDestination by remember { mutableStateOf<String?>(null) }
-
     LaunchedEffect(Unit) {
-        combine(settings.onboardingDone, settings.telegramLoggedIn) { done, loggedIn ->
-            done to loggedIn
-        }.collect { (done, loggedIn) ->
-            if (startDestination == null) {
-                startDestination = when {
-                    !done -> Routes.WELCOME
-                    !loggedIn -> Routes.TELEGRAM_LOGIN
-                    else -> Routes.DASHBOARD
-                }
+        combine(settings.onboardingDone, settings.telegramLoggedIn) { done, loggedIn -> done to loggedIn }.collect { (done, loggedIn) ->
+            if (startDestination == null) startDestination = when {
+                !done -> Routes.WELCOME
+                !loggedIn -> Routes.TELEGRAM_LOGIN
+                else -> Routes.DASHBOARD
             }
         }
     }
-
     val resolved = startDestination
     if (resolved == null) {
-        Surface(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
+        Surface(Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         return
     }
-
     LaunchedEffect(resolved, deepLinkRoute) {
-        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) {
-            runCatching { navController.navigate(deepLinkRoute) }
-        }
+        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) runCatching { navController.navigate(deepLinkRoute) }
     }
-
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
     val showBottomBar = bottomTabs.any { it.route == currentRoute }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (showBottomBar) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 0.dp
-                ) {
-                    bottomTabs.forEach { tab ->
-                        NavigationBarItem(
-                            selected = currentRoute == tab.route,
-                            onClick = {
-                                if (currentRoute != tab.route) {
-                                    navController.navigate(tab.route) {
-                                        popUpTo(navController.graph.startDestinationId) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                }
-                            },
-                            icon = { Icon(tab.icon, contentDescription = tab.label) },
-                            label = { Text(tab.label) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                                selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                indicatorColor = AirNavSelected,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+            if (showBottomBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                bottomTabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = currentRoute == tab.route,
+                        onClick = {
+                            if (currentRoute != tab.route) navController.navigate(tab.route) {
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                            indicatorColor = AirNavSelected,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    }
+                    )
                 }
             }
         }
     ) { paddingValues ->
-        NavHost(
-            navController = navController,
-            startDestination = resolved,
-            modifier = Modifier.padding(paddingValues)
-        ) {
+        NavHost(navController = navController, startDestination = resolved, modifier = Modifier.padding(paddingValues)) {
             composable(Routes.WELCOME) { WelcomeScreen(navController) }
             composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
             composable(Routes.API_CREDENTIALS) { ApiCredentialsScreen(navController) }
@@ -185,7 +152,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.DASHBOARD) { DashboardScreen(navController) }
             composable(Routes.BACKUP_PROGRESS) { BackupProgressScreen(navController) }
             composable(Routes.ACTIVITY_HISTORY) { ActivityHistoryScreen(navController) }
-            composable(Routes.CATEGORIES_STATS) { CategoriesStatsScreen(navController) }
+            composable(Routes.CATEGORIES_STATS) { FilesHubScreen(navController) }
             composable(Routes.DESTINATION) { DestinationScreen(navController) }
             composable(Routes.CHANNEL_CONFIG) { ChannelConfigScreen(navController) }
             composable(Routes.TELEGRAM_SETTINGS) { TelegramSettingsScreen(navController) }
@@ -203,23 +170,16 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
             composable(Routes.SEARCH) { SearchScreen(navController) }
             composable(Routes.GALLERY) { IncrementalGalleryScreen(navController) }
-            composable(
-                "${Routes.CATEGORY_DETAIL}/{category}",
-                arguments = listOf(navArgument("category") { type = NavType.StringType })
-            ) { entry ->
-                val category = BackupCategory.values().find {
-                    it.name == entry.arguments?.getString("category")
-                } ?: BackupCategory.OTHER_FILES
-                ReferenceCategoryDetailScreen(navController, category)
+            composable("${Routes.CATEGORY_DETAIL}/{category}", arguments = listOf(navArgument("category") { type = NavType.StringType })) { entry ->
+                val raw = entry.arguments?.getString("category")
+                val category = BackupCategory.values().find { it.name == raw }
+                FilesHubScreen(navController, category)
             }
             composable(Routes.MIGRATE) { MigrationScreen(navController) }
             composable(Routes.CLEANUP) { CleanupScreen(navController) }
             composable(Routes.VERIFY) { VerifyScreen(navController) }
             composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
-            composable(
-                "${Routes.RUN_DETAIL}/{runId}",
-                arguments = listOf(navArgument("runId") { type = NavType.LongType })
-            ) { entry ->
+            composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry ->
                 RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
             }
         }
