@@ -597,7 +597,7 @@ fun CategoryDetailScreen(nav: NavHostController, category: BackupCategory) {
             query = "", categoryName = category.name, statusName = statusFilter,
             localStateName = "", folder = "", chatId = 0,
             minBytes = 0, maxBytes = 0, fromMillis = 0, toMillis = 0,
-            sort = 0, limit = CATEGORY_DETAIL_LIMIT
+            sort = "newest", limit = CATEGORY_DETAIL_LIMIT
         )
     }.collectAsState(initial = emptyList())
     val total by remember(statusFilter) {

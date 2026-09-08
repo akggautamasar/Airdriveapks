@@ -42,9 +42,9 @@ private enum class SizeBand(val label: String, val minBytes: Long, val maxBytes:
     HUGE("Over 1 GB", 1L shl 30, 0)
 }
 
-private enum class SortOrder(val label: String, val code: Int) {
-    NEWEST("Newest", 0), OLDEST("Oldest", 4), LARGEST("Largest", 1),
-    SMALLEST("Smallest", 5), NAME_AZ("Name A–Z", 2), NAME_ZA("Name Z–A", 3)
+private enum class SortOrder(val label: String, val code: String) {
+    NEWEST("Newest", "newest"), OLDEST("Oldest", "oldest"), LARGEST("Largest", "largest"),
+    SMALLEST("Smallest", "smallest"), NAME_AZ("Name A–Z", "name"), NAME_ZA("Name Z–A", "name_desc")
 }
 
 /**
