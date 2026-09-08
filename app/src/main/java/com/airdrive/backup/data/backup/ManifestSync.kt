@@ -15,9 +15,8 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 /**
- * Keeps a copy of which files are already backed up inside the user's own Telegram Saved
- * Messages. Room is the live inventory; this manifest is the portable recovery/reconciliation
- * index that survives uninstall/reinstall.
+ * Keeps a portable inventory manifest in Saved Messages. Room is the live inventory; this
+ * manifest is the recovery source that survives reinstall and is reconciled back into Room.
  */
 class ManifestSync(private val context: Context) {
     private val tag = "AirDrive.Manifest"
@@ -77,29 +76,76 @@ class ManifestSync(private val context: Context) {
         }
     }
 
-    /** Reads the latest manifest and merges entries missing from the local Room inventory. */
+    /**
+     * Rebuilds missing Room rows from the manifest already stored in Telegram.
+     * Supports both the current gzip file and older/plain JSON manifest files.
+     * If Telegram search cannot find the document, Saved Messages history is scanned for a
+     * document whose filename contains "airdrive-manifest".
+     */
     suspend fun reconcileAvailableManifest(): Int = withContext(Dispatchers.IO) {
         try {
             if (!tdClient.awaitReady(30_000)) return@withContext 0
-            val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER) ?: return@withContext 0
-            settings.setManifestLocation(message.chatId, message.id)
-            val downloaded = tdClient.downloadFile(message)
-            val manifest = BackupManifest.parse(readGzipped(File(downloaded.path)))
-            val rows = manifest.entries.filter { it.chatId != 0L && it.messageId != 0L }
-            var inserted = 0
-            rows.chunked(200).forEach { chunk ->
-                val missing = chunk.filter { dao.findByTelegramMessage(it.chatId, it.messageId) == null }
-                if (missing.isNotEmpty()) {
-                    inserted += dao.insertRestored(missing.map { it.toUploadedRecord() }).count { it != -1L }
+
+            var message = runCatching { tdClient.findLatestOwnDocument(MANIFEST_MARKER) }.getOrNull()
+            if (message == null) {
+                val savedChatId = tdClient.savedMessagesChatId()
+                val candidates = tdClient.scanChannelFiles(savedChatId)
+                    .asReversed()
+                    .filter { it.fileName.lowercase().contains("airdrive-manifest") }
+                val candidate = candidates.lastOrNull()
+                if (candidate != null) {
+                    // GetMessage/downloadMessageFile needs only the chat and message identity.
+                    message = null
+                    settings.setManifestLocation(candidate.chatId, candidate.messageId)
+                    val downloaded = tdClient.downloadMessageFile(candidate.chatId, candidate.messageId)
+                    return@withContext importManifestFile(File(downloaded.path), candidate.chatId, candidate.messageId)
                 }
             }
-            File(downloaded.path).delete()
-            Log.i(tag, "manifest reconciliation imported $inserted missing file(s) from ${rows.size} entries")
-            inserted
+
+            if (message == null) return@withContext 0
+            settings.setManifestLocation(message.chatId, message.id)
+            val downloaded = tdClient.downloadFile(message)
+            importManifestFile(File(downloaded.path), message.chatId, message.id)
         } catch (e: Exception) {
             Log.w(tag, "manifest reconciliation failed: ${e.message}")
             0
         }
+    }
+
+    private suspend fun importManifestFile(file: File, chatId: Long, messageId: Long): Int {
+        try {
+            val manifest = readManifest(file)
+            val rows = manifest.entries.filter { it.chatId != 0L && it.messageId != 0L }
+            var inserted = 0
+            var existing = 0
+            rows.chunked(200).forEach { chunk ->
+                val missing = chunk.filter { entry ->
+                    dao.findByTelegramMessage(entry.chatId, entry.messageId) == null &&
+                        dao.findByFingerprint(entry.fingerprint) == null
+                }
+                existing += chunk.size - missing.size
+                if (missing.isNotEmpty()) {
+                    inserted += dao.insertRestored(missing.map { it.toUploadedRecord() }).count { it != -1L }
+                }
+            }
+            file.delete()
+            Log.i(tag, "manifest reconciliation: ${rows.size} entries, $inserted imported, $existing already indexed")
+            return inserted
+        } catch (e: Exception) {
+            file.delete()
+            throw e
+        }
+    }
+
+    /** Accept current gzip manifests and older/plain JSON files. */
+    private fun readManifest(file: File): BackupManifest {
+        val bytes = file.readBytes()
+        val jsonText = runCatching {
+            GZIPInputStream(bytes.inputStream()).use { it.readBytes() }.toString(Charsets.UTF_8)
+        }.getOrElse {
+            bytes.toString(Charsets.UTF_8).trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+        }
+        return BackupManifest.parse(JSONObject(jsonText))
     }
 
     suspend fun restoreIfAvailable(force: Boolean = false): RestoreResult = withContext(Dispatchers.IO) {
@@ -109,8 +155,7 @@ class ManifestSync(private val context: Context) {
             val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER) ?: return@withContext RestoreResult.NoManifestFound
             settings.setManifestLocation(message.chatId, message.id)
             val downloaded = tdClient.downloadFile(message)
-            val json = readGzipped(File(downloaded.path))
-            val manifest = BackupManifest.parse(json)
+            val manifest = readManifest(File(downloaded.path))
             val rows = manifest.entries.map { it.toUploadedRecord() }
             var inserted = 0
             rows.chunked(200).forEach { chunk -> inserted += dao.insertRestored(chunk).count { it != -1L } }
@@ -132,9 +177,6 @@ class ManifestSync(private val context: Context) {
         GZIPOutputStream(file.outputStream()).use { gz -> gz.write(json.toString().toByteArray(Charsets.UTF_8)) }
         return file
     }
-
-    private fun readGzipped(file: File): JSONObject =
-        JSONObject(GZIPInputStream(file.inputStream()).use { it.readBytes() }.toString(Charsets.UTF_8))
 
     sealed class RestoreResult {
         object NothingToDo : RestoreResult()
