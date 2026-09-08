@@ -12,8 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.airdrive.backup.data.backup.ChannelSyncResult
-import com.airdrive.backup.data.backup.TelegramChannelSync
 import com.airdrive.backup.data.backup.TelegramSyncState
 import com.airdrive.backup.data.backup.TelegramSyncStateStore
 import com.airdrive.backup.data.db.BackupCategory
@@ -35,6 +33,7 @@ fun ChannelConfigScreen(nav: NavHostController) {
     val channelMap by settings.allChannels.collectAsState(initial = null)
     val syncState by stateStore.state.collectAsState(initial = TelegramSyncState())
     var testing by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf<BackupCategory?>(null) }
     var results by remember { mutableStateOf<Map<BackupCategory, ChannelCheck>>(emptyMap()) }
     var savedNotice by remember { mutableStateOf<String?>(null) }
@@ -70,16 +69,42 @@ fun ChannelConfigScreen(nav: NavHostController) {
                 )
                 Spacer(Modifier.height(12.dp))
                 Button(
-                    onClick = { testing = true; scope.launch { results = repository.testAllChannels().toMap(); testing = false } },
-                    enabled = !testing && !syncState.running,
+                    onClick = {
+                        testing = true
+                        scope.launch {
+                            try { results = repository.testAllChannels().toMap() }
+                            catch (e: Exception) { say(e.message ?: "Could not test Telegram channels", true) }
+                            finally { testing = false }
+                        }
+                    },
+                    enabled = !testing && !importing && !syncState.running,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(if (testing) "Testing…" else "Test all channels") }
 
                 Button(
-                    onClick = { WorkScheduler.importTelegramChannels(context) },
-                    enabled = !syncState.running && !testing,
+                    onClick = {
+                        importing = true
+                        say("Starting Telegram inventory…")
+                        scope.launch {
+                            try {
+                                WorkScheduler.importTelegramChannelsAwait(context)
+                                say("Telegram inventory queued. It will scan all connected channels and update AirDrive in the background.")
+                            } catch (e: Exception) {
+                                say(e.message ?: "Could not start Telegram inventory", true)
+                            } finally {
+                                importing = false
+                            }
+                        }
+                    },
+                    enabled = !syncState.running && !testing && !importing,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                ) { Text(if (syncState.running) "Importing Telegram files…" else "Import existing Telegram files") }
+                ) {
+                    Text(when {
+                        syncState.running -> "Importing Telegram files…"
+                        importing -> "Starting import…"
+                        else -> "Import existing Telegram files"
+                    })
+                }
 
                 if (syncState.running || syncState.filesFound > 0 || syncState.finishedAt > 0L) {
                     Spacer(Modifier.height(10.dp))
@@ -121,7 +146,7 @@ fun ChannelConfigScreen(nav: NavHostController) {
                             finally { working = null }
                         }
                     },
-                    enabled = working == null && !testing && !syncState.running,
+                    enabled = working == null && !testing && !syncState.running && !importing,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                 ) { Text("Create channels for empty categories") }
 
@@ -149,7 +174,7 @@ fun ChannelConfigScreen(nav: NavHostController) {
                                         finally { working = null }
                                     }
                                 },
-                                enabled = working == null && text.isNotBlank() && !syncState.running
+                                enabled = working == null && text.isNotBlank() && !syncState.running && !importing
                             ) { Text("Save") }
                             Spacer(Modifier.width(8.dp))
                             TextButton(
@@ -162,12 +187,10 @@ fun ChannelConfigScreen(nav: NavHostController) {
                                             assign(category, created.chatId, created.title)
                                         } catch (e: Exception) {
                                             say(e.message ?: "Could not create the channel", true)
-                                        } finally {
-                                            working = null
-                                        }
+                                        } finally { working = null }
                                     }
                                 },
-                                enabled = working == null && !syncState.running
+                                enabled = working == null && !syncState.running && !importing
                             ) { Text("Create") }
                             Spacer(Modifier.width(8.dp))
                             if (rowBusy) CircularProgressIndicator(Modifier.size(18.dp)) else when (check) {
