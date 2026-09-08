@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.airdrive.backup.data.backup.ChannelSyncResult
+import com.airdrive.backup.data.backup.TelegramChannelSync
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
@@ -25,24 +27,21 @@ fun ChannelConfigScreen(nav: NavHostController) {
     val context = LocalContext.current
     val settings = remember { SettingsStore(context) }
     val repository = remember { BackupRepository.get(context) }
+    val channelSync = remember { TelegramChannelSync.get(context) }
     val scope = rememberCoroutineScope()
     val channelMap by settings.allChannels.collectAsState(initial = null)
-
     var testing by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf<BackupCategory?>(null) }
+    var syncing by remember { mutableStateOf(false) }
+    var syncProgress by remember { mutableStateOf<String?>(null) }
+    var syncResult by remember { mutableStateOf<ChannelSyncResult?>(null) }
     var results by remember { mutableStateOf<Map<BackupCategory, ChannelCheck>>(emptyMap()) }
     var savedNotice by remember { mutableStateOf<String?>(null) }
     var noticeIsError by remember { mutableStateOf(false) }
 
-    fun say(text: String, error: Boolean = false) {
-        savedNotice = text
-        noticeIsError = error
-    }
-
-    /** Stores [chatId] for [category] and repoints anything already queued for it. */
+    fun say(text: String, error: Boolean = false) { savedNotice = text; noticeIsError = error }
     suspend fun assign(category: BackupCategory, chatId: Long, label: String) {
         settings.setChannel(category, chatId)
-        // Rows queued before this edit still point at the old id.
         repository.repointCategory(category, chatId)
         results = results - category
         say("${categoryLabel(category)} → $label")
@@ -50,171 +49,79 @@ fun ChannelConfigScreen(nav: NavHostController) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Channel Configuration") },
-                navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
+            TopAppBar(title = { Text("Channel Configuration") }, navigationIcon = {
+                IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") }
+            })
         }
     ) { padding ->
         val map = channelMap
         if (map == null) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             return@Scaffold
         }
-
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             item {
-                Text(
-                    "Each category uploads to its own Telegram channel. Paste an ID, a @username, " +
-                        "a t.me link or an invite link — or let AirDrive create the channel for " +
-                        "you. “Chat not found” means the signed-in account is not a member, so " +
-                        "test before running a backup.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("Connect AirDrive to your Telegram storage channels. AirDrive can also import files that were already in those channels, including files sent directly from Telegram.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                Button(
-                    onClick = {
-                        testing = true
-                        scope.launch {
-                            results = repository.testAllChannels().toMap()
-                            testing = false
-                        }
-                    },
-                    enabled = !testing,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (testing) "Testing…" else "Test all channels") }
-                OutlinedButton(
-                    onClick = {
-                        working = BackupCategory.values().first()
-                        scope.launch {
-                            var made = 0
-                            try {
-                                for (category in BackupCategory.values()) {
-                                    working = category
-                                    if ((map.perCategory[category] ?: 0L) != 0L) continue
-                                    val created = repository.createChannel(
-                                        "AirDrive ${categoryLabel(category)}"
-                                    )
-                                    assign(category, created.chatId, created.title)
-                                    made++
-                                }
-                                say(
-                                    if (made == 0) "Every category already has a channel."
-                                    else "Created $made channel(s)."
-                                )
-                            } catch (e: Exception) {
-                                say(e.message ?: "Telegram would not create the channel", true)
-                            } finally {
-                                working = null
-                            }
-                        }
-                    },
-                    enabled = working == null && !testing,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                ) { Text("Create channels for the empty ones") }
-                savedNotice?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (noticeIsError) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.primary
-                    )
+                Button(onClick = { testing = true; scope.launch { results = repository.testAllChannels().toMap(); testing = false } }, enabled = !testing && !syncing, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (testing) "Testing…" else "Test all channels")
                 }
+                Button(onClick = {
+                    syncing = true; syncResult = null; syncProgress = "Preparing Telegram…"
+                    scope.launch {
+                        try {
+                            syncResult = channelSync.syncConfiguredChannels { syncProgress = it }
+                            say("Telegram sync complete")
+                        } catch (e: Exception) { say(e.message ?: "Telegram sync failed", true) }
+                        finally { syncing = false }
+                    }
+                }, enabled = !syncing && !testing, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text(if (syncing) "Importing Telegram files…" else "Import existing Telegram files")
+                }
+                if (syncing) {
+                    Spacer(Modifier.height(8.dp)); LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text(syncProgress ?: "Scanning…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+                }
+                syncResult?.let { r ->
+                    Spacer(Modifier.height(10.dp))
+                    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) {
+                        Text("Telegram inventory updated", style = MaterialTheme.typography.titleSmall)
+                        Text("${r.filesImported} imported • ${r.alreadyIndexed} already indexed • ${r.messagesScanned} files found${if (r.failedChannels > 0) " • ${r.failedChannels} channel(s) failed" else ""}", style = MaterialTheme.typography.bodySmall)
+                    } }
+                }
+                OutlinedButton(onClick = {
+                    working = BackupCategory.values().first()
+                    scope.launch {
+                        var made = 0
+                        try { for (category in BackupCategory.values()) { working = category; if ((map.perCategory[category] ?: 0L) != 0L) continue; val created = repository.createChannel("AirDrive ${categoryLabel(category)}"); assign(category, created.chatId, created.title); made++ }; say(if (made == 0) "Every category already has a channel." else "Created $made channel(s).") }
+                        catch (e: Exception) { say(e.message ?: "Telegram would not create the channel", true) }
+                        finally { working = null }
+                    }
+                }, enabled = working == null && !testing && !syncing, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Create channels for empty categories") }
+                savedNotice?.let { Spacer(Modifier.height(8.dp)); Text(it, style = MaterialTheme.typography.bodySmall, color = if (noticeIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
                 Spacer(Modifier.height(16.dp))
             }
             items(BackupCategory.values().toList()) { category ->
-                var text by remember(category, map.perCategory[category]) {
-                    mutableStateOf(map.perCategory[category]?.takeIf { it != 0L }?.toString() ?: "")
-                }
-                val check = results[category]
-                val rowBusy = working == category
-                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                var text by remember(category, map.perCategory[category]) { mutableStateOf(map.perCategory[category]?.takeIf { it != 0L }?.toString() ?: "") }
+                val check = results[category]; val rowBusy = working == category
+                Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Column(Modifier.padding(16.dp)) {
                         Text(categoryLabel(category), style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = text,
-                            onValueChange = { text = it },
-                            label = { Text("ID, @username or link") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("ID, @username or link") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = {
-                                    // A bare id still works offline; anything else has to be
-                                    // resolved through Telegram before it can be saved.
-                                    val direct = TdClient.normalizeChannelId(text)
-                                    working = category
-                                    scope.launch {
-                                        try {
-                                            if (direct != null) {
-                                                text = direct.toString()
-                                                assign(category, direct, direct.toString())
-                                            } else {
-                                                val resolved = repository.resolveChatInput(text)
-                                                text = resolved.chatId.toString()
-                                                assign(category, resolved.chatId, resolved.title)
-                                            }
-                                        } catch (e: Exception) {
-                                            say(
-                                                "${categoryLabel(category)}: " +
-                                                    (e.message ?: "could not open that chat"),
-                                                true
-                                            )
-                                        } finally {
-                                            working = null
-                                        }
-                                    }
-                                },
-                                enabled = working == null && text.isNotBlank()
-                            ) { Text("Save") }
+                            Button(onClick = {
+                                val direct = TdClient.normalizeChannelId(text); working = category
+                                scope.launch { try { if (direct != null) { text = direct.toString(); assign(category, direct, direct.toString()) } else { val resolved = repository.resolveChatInput(text); text = resolved.chatId.toString(); assign(category, resolved.chatId, resolved.title) } } catch (e: Exception) { say("${categoryLabel(category)}: ${e.message ?: "could not open that chat"}", true) } finally { working = null } }
+                            }, enabled = working == null && text.isNotBlank() && !syncing) { Text("Save") }
                             Spacer(Modifier.width(8.dp))
-                            TextButton(
-                                onClick = {
-                                    working = category
-                                    scope.launch {
-                                        try {
-                                            val created = repository.createChannel(
-                                                "AirDrive ${categoryLabel(category)}"
-                                            )
-                                            text = created.chatId.toString()
-                                            assign(category, created.chatId, created.title)
-                                        } catch (e: Exception) {
-                                            say(e.message ?: "Could not create the channel", true)
-                                        } finally {
-                                            working = null
-                                        }
-                                    }
-                                },
-                                enabled = working == null
-                            ) { Text("Create") }
+                            TextButton(onClick = { working = category; scope.launch { try { val created = repository.createChannel("AirDrive ${categoryLabel(category)}"); text = created.chatId.toString(); assign(category, created.chatId, created.title) } catch (e: Exception) { say(e.message ?: "Could not create the channel", true) } finally { working = null } } }, enabled = working == null && !syncing) { Text("Create") }
                             Spacer(Modifier.width(8.dp))
-                            if (rowBusy) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp))
-                            } else {
-                                when (check) {
-                                    is ChannelCheck.Ok -> Text(
-                                        "✓ ${check.title}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    is ChannelCheck.Failed -> Text(
-                                        check.reason,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                    null -> Unit
-                                }
+                            if (rowBusy) CircularProgressIndicator(Modifier.size(18.dp)) else when (check) {
+                                is ChannelCheck.Ok -> Text("✓ ${check.title}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                is ChannelCheck.Failed -> Text(check.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                null -> Unit
                             }
                         }
                     }
