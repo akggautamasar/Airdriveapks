@@ -41,20 +41,20 @@ class TelegramSyncStateStore(private val context: Context) {
     }
 
     suspend fun running(channels: Int, status: String) = edit {
-        it[Keys.RUNNING] = true; it[Keys.CHANNELS] = channels; it[Keys.STATUS] = status
+        this[Keys.RUNNING] = true; this[Keys.CHANNELS] = channels; this[Keys.STATUS] = status
     }
     suspend fun progress(currentChannel: Int, filesFound: Int, status: String) = edit {
-        it[Keys.RUNNING] = true; it[Keys.CURRENT_CHANNEL] = currentChannel; it[Keys.FILES_FOUND] = filesFound; it[Keys.STATUS] = status
+        this[Keys.RUNNING] = true; this[Keys.CURRENT_CHANNEL] = currentChannel; this[Keys.FILES_FOUND] = filesFound; this[Keys.STATUS] = status
     }
     suspend fun complete(channels: Int, filesFound: Int, imported: Int, already: Int, failed: Int, manifest: Int, status: String) = edit {
-        it[Keys.RUNNING] = false; it[Keys.CHANNELS] = channels; it[Keys.CURRENT_CHANNEL] = channels; it[Keys.FILES_FOUND] = filesFound
-        it[Keys.IMPORTED] = imported; it[Keys.ALREADY] = already; it[Keys.FAILED] = failed; it[Keys.MANIFEST] = manifest
-        it[Keys.STATUS] = status; it[Keys.FINISHED_AT] = System.currentTimeMillis()
+        this[Keys.RUNNING] = false; this[Keys.CHANNELS] = channels; this[Keys.CURRENT_CHANNEL] = channels; this[Keys.FILES_FOUND] = filesFound
+        this[Keys.IMPORTED] = imported; this[Keys.ALREADY] = already; this[Keys.FAILED] = failed; this[Keys.MANIFEST] = manifest
+        this[Keys.STATUS] = status; this[Keys.FINISHED_AT] = System.currentTimeMillis()
     }
-    suspend fun failed(status: String) = edit { it[Keys.RUNNING] = false; it[Keys.STATUS] = status; it[Keys.FINISHED_AT] = System.currentTimeMillis() }
+    suspend fun failed(status: String) = edit { this[Keys.RUNNING] = false; this[Keys.STATUS] = status; this[Keys.FINISHED_AT] = System.currentTimeMillis() }
 
-    private suspend fun edit(block: suspend (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
-        context.telegramSyncStore.edit(block)
+    private suspend fun edit(block: androidx.datastore.preferences.core.MutablePreferences.() -> Unit) {
+        context.telegramSyncStore.edit { block() }
     }
 
     private object Keys {
