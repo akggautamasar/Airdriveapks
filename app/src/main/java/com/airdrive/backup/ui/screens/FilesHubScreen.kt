@@ -88,7 +88,7 @@ fun FilesHubScreen(nav: NavHostController, initialCategory: BackupCategory? = nu
     }.collectAsState(initial = emptyList())
 
     val total by remember(query, categoryName, status, localState) {
-        dao.searchCountFlow(query.trim(), categoryName, status, localState, "", 0L, 0L, 0L, 0L)
+        dao.searchCountFlow(query.trim(), categoryName, status, localState, "", 0L, 0L, 0L, 0L, 0L)
     }.collectAsState(initial = 0)
 
     Scaffold(
