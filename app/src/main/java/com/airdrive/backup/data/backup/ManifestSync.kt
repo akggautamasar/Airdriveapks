@@ -15,10 +15,9 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 /**
- * Keeps a copy of "which files are already backed up, and where things were configured" sitting
- * inside the user's own Telegram Saved Messages. This is what lets AirDrive survive an
- * uninstall/reinstall: the app has no local state left at that point, but Telegram still has the
- * manifest, findable purely by [findLatestOwnDocument] with no locally stored id needed.
+ * Keeps a copy of which files are already backed up inside the user's own Telegram Saved
+ * Messages. Room is the live inventory; this manifest is the portable recovery/reconciliation
+ * index that survives uninstall/reinstall.
  */
 class ManifestSync(private val context: Context) {
 
@@ -27,11 +26,6 @@ class ManifestSync(private val context: Context) {
     private val settings = SettingsStore(context)
     private val tdClient = TdClient.get(context)
 
-    /**
-     * Builds the manifest from the current DB + settings, uploads it to Saved Messages, and
-     * pins the message so it survives Telegram's own "clear chat history" and stays easy to
-     * find by eye too — pinned messages are Telegram's own equivalent of "do not delete".
-     */
     suspend fun sync(): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!tdClient.awaitReady(15_000)) return@withContext false
@@ -68,8 +62,6 @@ class ManifestSync(private val context: Context) {
                 "reinstall the app. Deleting it just means a reinstall will re-scan instead " +
                 "of remembering — your uploaded files themselves are unaffected either way."
 
-            // Edit the same message every time rather than sending a fresh one, so Saved
-            // Messages ends up with exactly one manifest document, not one per checkpoint.
             val cached = settings.manifestLocation.first()
             var edited = false
             if (cached != null) {
@@ -79,10 +71,6 @@ class ManifestSync(private val context: Context) {
             }
 
             if (!edited) {
-                // No cached location (fresh install, or the cached message id is stale) — look
-                // for an existing manifest by search before giving up and sending a new one, so
-                // a reinstall that already restored from an old manifest keeps editing that
-                // same message rather than starting a second one.
                 val existing = runCatching { tdClient.findLatestOwnDocument(MANIFEST_MARKER) }.getOrNull()
                 if (existing != null) {
                     edited = runCatching {
@@ -114,12 +102,36 @@ class ManifestSync(private val context: Context) {
     }
 
     /**
-     * Looks for a previous manifest in Saved Messages and, if found, restores every entry as an
-     * already-UPLOADED row plus the saved destination settings — so a reinstall picks up right
-     * where the old install left off instead of treating every file as new. [force] restores
-     * even if the local DB already has rows (used by the "Restore backup data" button in
-     * Settings, as opposed to the automatic once-per-install check).
+     * Reads the latest AirDrive manifest from Telegram and merges every entry into Room.
+     * This intentionally does not require an empty database: it is used to repair/reconcile an
+     * existing install where Telegram already knows about files that the local database missed.
      */
+    suspend fun reconcileAvailableManifest(): Int = withContext(Dispatchers.IO) {
+        try {
+            if (!tdClient.awaitReady(30_000)) return@withContext 0
+            val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER) ?: return@withContext 0
+            settings.setManifestLocation(message.chatId, message.id)
+            val downloaded = tdClient.downloadFile(message)
+            val manifest = readGzipped(File(downloaded.path))
+            val rows = manifest.entries.filter { it.chatId != 0L && it.messageId != 0L }
+            var inserted = 0
+            rows.chunked(200).forEach { chunk ->
+                val missing = chunk.filter { dao.findByTelegramMessage(it.chatId, it.messageId) == null }
+                if (missing.isNotEmpty()) inserted += dao.insertRestored(missing.map { it.toUploadedRecord() }).count { it != -1L }
+            }
+            if (manifest.singleChatId != 0L) settings.setSingleChatId(manifest.singleChatId)
+            if (manifest.perCategoryChannels.isNotEmpty()) settings.setChannels(manifest.perCategoryChannels)
+            settings.setDestinationMode(manifest.destinationMode)
+            if (manifest.captionTemplate.isNotBlank()) settings.setCaptionTemplate(manifest.captionTemplate)
+            File(downloaded.path).delete()
+            Log.i(tag, "manifest reconciliation imported $inserted missing file(s) from ${rows.size} entries")
+            inserted
+        } catch (e: Exception) {
+            Log.w(tag, "manifest reconciliation failed: ${e.message}")
+            0
+        }
+    }
+
     suspend fun restoreIfAvailable(force: Boolean = false): RestoreResult = withContext(Dispatchers.IO) {
         try {
             if (!force && dao.totalRowCount() > 0) return@withContext RestoreResult.NothingToDo
@@ -129,7 +141,6 @@ class ManifestSync(private val context: Context) {
                 ?: return@withContext RestoreResult.NoManifestFound
 
             settings.setManifestLocation(message.chatId, message.id)
-
             val downloaded = tdClient.downloadFile(message)
             val json = readGzipped(File(downloaded.path))
             val manifest = BackupManifest.parse(json)
@@ -177,12 +188,9 @@ class ManifestSync(private val context: Context) {
 
     companion object {
         private const val PAGE_SIZE = 500
-
         @Volatile private var instance: ManifestSync? = null
-
-        fun get(context: Context): ManifestSync =
-            instance ?: synchronized(this) {
-                instance ?: ManifestSync(context.applicationContext).also { instance = it }
-            }
+        fun get(context: Context): ManifestSync = instance ?: synchronized(this) {
+            instance ?: ManifestSync(context.applicationContext).also { instance = it }
+        }
     }
 }
