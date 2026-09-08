@@ -12,13 +12,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,18 +36,20 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-private val RestoreBlue = Color(0xFF2F6FEA)
-private val RestoreBlueLight = Color(0xFFDCEBFF)
-private val RestorePurple = Color(0xFF7C3AED)
-private val RestorePurpleLight = Color(0xFFF0DFFF)
-private val RestoreGreen = Color(0xFF20A463)
-private val RestoreGreenLight = Color(0xFFDDF6EC)
-private val RestoreRed = Color(0xFFE84A5F)
-private val RestoreRedLight = Color(0xFFFFE1E6)
-private val RestoreOrange = Color(0xFFF59E0B)
-private val RestoreOrangeLight = Color(0xFFFFEBD0)
-private val RestoreCyan = Color(0xFF18B8C8)
-private val RestoreBackground = Color(0xFFF7F9FD)
+private val RBlue = Color(0xFF2F6FEA)
+private val RBlueLight = Color(0xFFDCEBFF)
+private val RPurple = Color(0xFF7C3AED)
+private val RPurpleLight = Color(0xFFF0DFFF)
+private val RGreen = Color(0xFF20A463)
+private val RGreenLight = Color(0xFFDDF6EC)
+private val RRed = Color(0xFFE84A5F)
+private val RRedLight = Color(0xFFFFE1E6)
+private val ROrange = Color(0xFFF59E0B)
+private val ROrangeLight = Color(0xFFFFEBD0)
+private val RCyan = Color(0xFF18B8C8)
+private val RBg = Color(0xFFF7F9FD)
+private val RText = Color(0xFF17213B)
+private val RSub = Color(0xFF6E7788)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,412 +59,89 @@ fun RestoreScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
     var categoryFilter by remember { mutableStateOf<BackupCategory?>(null) }
-    val selected = remember { mutableStateListOf<Long>() }
+    var selected by remember { mutableStateOf(emptySet<Long>()) }
     var bulkRunning by remember { mutableStateOf(false) }
     var bulkDone by remember { mutableStateOf(0) }
-    var bulkTotal by remember { mutableStateOf(0) }
     var bulkFailed by remember { mutableStateOf(0) }
-    val restorable by remember(query, categoryFilter) {
-        repository.restorableFlow(query.trim(), categoryFilter?.name ?: "")
+    var bulkTotal by remember { mutableStateOf(0) }
+
+    // 5,000 is no longer the old 200-file ceiling. It comfortably covers the current library while
+    // LazyColumn keeps only visible rows composed. The migration screen remains the preferred path
+    // for truly enormous libraries because its WorkManager queue is fully paged.
+    val records by remember(query, categoryFilter) {
+        repository.restorableFlow(query.trim(), categoryFilter?.name ?: "", 5000)
     }.collectAsState(initial = emptyList())
     val restore by repository.restoreState.collectAsState()
-    LaunchedEffect(restorable) { selected.retainAll(restorable.map { it.id }.toSet()) }
-    val allSelected = restorable.isNotEmpty() && selected.size == restorable.size
+    LaunchedEffect(records) { selected = selected.intersect(records.map { it.id }.toSet()) }
+    val allSelected = records.isNotEmpty() && selected.size == records.size
     DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
 
-    Scaffold(
-        containerColor = RestoreBackground,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            "Restore",
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF17213B)
-                        )
-                        Text(
-                            "Get your files back, anytime",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF6E7788)
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (selected.isEmpty()) nav.popBackStack() else selected.clear()
-                    }) {
-                        Icon(Icons.Default.ArrowBack, "Back", tint = Color(0xFF263246))
-                    }
-                },
-                actions = {
-                    if (restorable.isNotEmpty()) {
-                        TextButton(onClick = {
-                            if (allSelected) selected.clear()
-                            else {
-                                selected.clear()
-                                selected.addAll(restorable.map { it.id })
-                            }
-                        }) {
-                            Icon(Icons.Default.SelectAll, null, modifier = Modifier.size(18.dp), tint = RestoreBlue)
-                            Spacer(Modifier.width(5.dp))
-                            Text(if (allSelected) "Clear" else "Select all", color = RestoreBlue)
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = RestoreBackground)
-            )
-        }
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            // Primary restore paths: old phone -> new phone and Telegram -> this phone.
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                RestoreSourceCard(
-                    title = "Restore from\nOld Device",
-                    subtitle = "Transfer files from your\nprevious device",
-                    icon = Icons.Default.PhoneAndroid,
-                    iconTint = RestoreBlue,
-                    containerColor = RestoreBlueLight,
-                    onClick = { nav.navigate(Routes.MIGRATE) }
-                )
-                RestoreSourceCard(
-                    title = "Restore from\nTelegram",
-                    subtitle = "Download your\nbacked up files",
-                    icon = Icons.Default.CloudDownload,
-                    iconTint = RestorePurple,
-                    containerColor = RestorePurpleLight,
-                    onClick = { /* already on Telegram restore */ }
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = Color(0xFF596579)) },
-                placeholder = { Text("Search uploaded files…", color = Color(0xFF7B8494)) },
-                singleLine = true,
-                shape = RoundedCornerShape(18.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedContainerColor = Color.White,
-                    focusedContainerColor = Color.White,
-                    unfocusedBorderColor = Color(0xFFD9DEEA),
-                    focusedBorderColor = RestoreBlue
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(62.dp)
-                    .padding(horizontal = 16.dp)
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(9.dp)
-            ) {
-                RestoreFilterChip("All", categoryFilter == null, RestoreBlue, RestoreBlueLight) { categoryFilter = null }
-                RestoreFilterChip("Photos", categoryFilter == BackupCategory.PHOTOS, RestoreGreen, RestoreGreenLight) {
-                    categoryFilter = if (categoryFilter == BackupCategory.PHOTOS) null else BackupCategory.PHOTOS
-                }
-                RestoreFilterChip("Videos", categoryFilter == BackupCategory.VIDEOS, RestoreRed, RestoreRedLight) {
-                    categoryFilter = if (categoryFilter == BackupCategory.VIDEOS) null else BackupCategory.VIDEOS
-                }
-                RestoreFilterChip("PDFs", categoryFilter == BackupCategory.PDFS, RestoreOrange, RestoreOrangeLight) {
-                    categoryFilter = if (categoryFilter == BackupCategory.PDFS) null else BackupCategory.PDFS
-                }
-                RestoreFilterChip("Documents", categoryFilter == BackupCategory.WORD_EXCEL, RestorePurple, RestorePurpleLight) {
-                    categoryFilter = if (categoryFilter == BackupCategory.WORD_EXCEL) null else BackupCategory.WORD_EXCEL
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            if (bulkRunning) {
-                RestoreProgressCard(
-                    title = "Restoring $bulkDone of $bulkTotal",
-                    subtitle = if (bulkFailed > 0) "$bulkFailed failed" else "Please keep AirDrive open",
-                    progress = if (bulkTotal == 0) 0f else bulkDone.toFloat() / bulkTotal
-                )
-            } else restore?.let { state ->
-                Card(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(state.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                        if (state.error != null) Text(state.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                        else if (state.finishedPath != null) Text("Saved to ${state.finishedPath}", color = RestoreGreen, style = MaterialTheme.typography.bodySmall)
-                        else if (state.running) {
-                            Spacer(Modifier.height(6.dp))
-                            LinearProgressIndicator(progress = { state.fraction }, modifier = Modifier.fillMaxWidth())
-                            Text("${formatBytes(state.doneBytes)} of ${formatBytes(state.totalBytes)}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (!state.running) TextButton(onClick = { repository.clearRestoreState() }) { Text("Dismiss") }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(2.dp))
-
-            if (restorable.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(48.dp), tint = RestoreBlue.copy(alpha = .65f))
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            if (query.isBlank() && categoryFilter == null) "Nothing has been uploaded from this phone yet."
-                            else "No uploaded file matches that.",
-                            color = Color(0xFF6E7788)
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    Modifier.weight(1f).padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(restorable, key = { it.id }) { record ->
-                        RestoreRow(
-                            record = record,
-                            checked = record.id in selected,
-                            busy = restore?.running == true || bulkRunning,
-                            onToggle = {
-                                if (record.id in selected) selected.remove(record.id) else selected.add(record.id)
-                            },
-                            onRestore = { scope.launch { runCatching { repository.restoreFile(record) } } }
-                        )
-                    }
-                }
-            }
-
-            if (selected.isNotEmpty()) {
-                Button(
-                    onClick = {
-                        val targets = restorable.filter { it.id in selected }
-                        bulkRunning = true
-                        bulkDone = 0
-                        bulkFailed = 0
-                        bulkTotal = targets.size
-                        scope.launch {
-                            for (record in targets) {
-                                runCatching { repository.restoreFile(record) }.onFailure { bulkFailed++ }
-                                bulkDone++
-                            }
-                            bulkRunning = false
-                            selected.clear()
-                        }
-                    },
-                    enabled = !bulkRunning && restore?.running != true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                        .height(52.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = RestoreBlue)
-                ) {
-                    Icon(Icons.Default.CloudDownload, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Restore ${selected.size} selected", fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RestoreSourceCard(
-    title: String,
-    subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    iconTint: Color,
-    containerColor: Color,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.width(190.dp).height(148.dp),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Box(Modifier.fillMaxSize().padding(16.dp)) {
-            Surface(
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White.copy(alpha = .82f)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, null, tint = iconTint, modifier = Modifier.size(28.dp))
-                }
-            }
-            Column(Modifier.padding(top = 58.dp).fillMaxWidth().padding(end = 26.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color(0xFF17213B))
-                Spacer(Modifier.height(3.dp))
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4F5D78))
-            }
-            Surface(
-                modifier = Modifier.align(Alignment.BottomEnd).size(36.dp),
-                shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = .9f)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.ArrowForward, null, tint = iconTint, modifier = Modifier.size(20.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RestoreProgressCard(title: String, subtitle: String, progress: Float) {
-    Card(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = RestoreBlueLight)
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.CloudDownload, null, tint = RestoreBlue)
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(title, fontWeight = FontWeight.SemiBold, color = Color(0xFF17213B))
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(0xFF52627D))
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-        }
-    }
-}
-
-@Composable
-private fun RestoreFilterChip(
-    label: String,
-    selected: Boolean,
-    tint: Color,
-    selectedBackground: Color,
-    onClick: () -> Unit
-) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) },
-        shape = RoundedCornerShape(14.dp),
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = selectedBackground,
-            selectedLabelColor = tint,
-            containerColor = Color.White,
-            labelColor = Color(0xFF657084)
-        ),
-        border = FilterChipDefaults.filterChipBorder(
-            enabled = true,
-            selected = selected,
-            borderColor = Color(0xFFD9DEEA),
-            selectedBorderColor = tint
+    Scaffold(containerColor = RBg, topBar = {
+        TopAppBar(
+            title = { Column { Text("Restore", fontWeight = FontWeight.Bold, color = RText); Text("Get your files back, anytime", style = MaterialTheme.typography.bodySmall, color = RSub) } },
+            navigationIcon = { IconButton(onClick = { if (selected.isEmpty()) nav.popBackStack() else selected = emptySet() }) { Icon(Icons.Default.ArrowBack, "Back") } },
+            actions = { if (records.isNotEmpty()) TextButton(onClick = { selected = if (allSelected) emptySet() else records.map { it.id }.toSet() }) { Icon(Icons.Default.SelectAll, null, Modifier.size(19.dp), tint = RBlue); Spacer(Modifier.width(5.dp)); Text(if (allSelected) "Clear" else "Select all", color = RBlue) } },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = RBg)
         )
-    )
-}
-
-@Composable
-private fun RestoreRow(
-    record: FileRecord,
-    checked: Boolean,
-    busy: Boolean,
-    onToggle: () -> Unit,
-    onRestore: () -> Unit
-) {
-    val context = LocalContext.current
-    val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
-    var bitmap by remember(record.uri) { mutableStateOf(MediaThumbnails.peek(record)) }
-    LaunchedEffect(record.uri) { if (bitmap == null) bitmap = MediaThumbnails.load(context, record) }
-    val accent = categoryAccent(record.category)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Checkbox(checked = checked, onCheckedChange = { onToggle() }, enabled = !busy)
-            Box(
-                Modifier.size(64.dp).clip(RoundedCornerShape(13.dp)).background(accent.copy(alpha = .12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                bitmap?.let {
-                    Image(bitmap = it.asImageBitmap(), contentDescription = record.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                } ?: Icon(categoryIcon(record.category), null, tint = accent, modifier = Modifier.size(28.dp))
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                PathCard("Restore from\nOld Device", "Full backup • resumable", Icons.Default.PhoneAndroid, RBlue, RBlueLight) { nav.navigate(Routes.MIGRATE) }
+                PathCard("Restore from\nTelegram", "Browse cloud copies", Icons.Default.CloudDownload, RPurple, RPurpleLight) { }
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(record.displayName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "${formatBytes(record.sizeBytes)} • ${record.uploadedAtMillis?.let { fmt.format(Date(it)) } ?: "uploaded"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF7A8494)
-                )
-                Spacer(Modifier.height(4.dp))
-                Surface(shape = RoundedCornerShape(8.dp), color = accent.copy(alpha = .12f)) {
-                    Row(Modifier.padding(horizontal = 7.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(categoryIcon(record.category), null, tint = accent, modifier = Modifier.size(13.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text(categoryLabel(record.category), style = MaterialTheme.typography.labelSmall, color = accent, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(14.dp))
+            OutlinedTextField(value = query, onValueChange = { query = it }, leadingIcon = { Icon(Icons.Default.Search, null, tint = Color(0xFF596579)) }, placeholder = { Text("Search uploaded files…") }, singleLine = true, shape = RoundedCornerShape(18.dp), colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White, focusedContainerColor = Color.White, unfocusedBorderColor = Color(0xFFD9DEEA), focusedBorderColor = RBlue), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(62.dp))
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("All", categoryFilter == null, RBlue, RBlueLight) { categoryFilter = null }
+                Chip("Photos", categoryFilter == BackupCategory.PHOTOS, RGreen, RGreenLight) { categoryFilter = if (categoryFilter == BackupCategory.PHOTOS) null else BackupCategory.PHOTOS }
+                Chip("Videos", categoryFilter == BackupCategory.VIDEOS, RRed, RRedLight) { categoryFilter = if (categoryFilter == BackupCategory.VIDEOS) null else BackupCategory.VIDEOS }
+                Chip("PDFs", categoryFilter == BackupCategory.PDFS, ROrange, ROrangeLight) { categoryFilter = if (categoryFilter == BackupCategory.PDFS) null else BackupCategory.PDFS }
+                Chip("Documents", categoryFilter == BackupCategory.WORD_EXCEL, RPurple, RPurpleLight) { categoryFilter = if (categoryFilter == BackupCategory.WORD_EXCEL) null else BackupCategory.WORD_EXCEL }
+                Chip("Audio", categoryFilter == BackupCategory.AUDIO, RCyan, Color(0xFFDDF7FA)) { categoryFilter = if (categoryFilter == BackupCategory.AUDIO) null else BackupCategory.AUDIO }
+            }
+            Spacer(Modifier.height(7.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${records.size} available", style = MaterialTheme.typography.labelLarge, color = RSub, modifier = Modifier.weight(1f))
+                if (selected.isNotEmpty()) Text("${selected.size} selected", style = MaterialTheme.typography.labelLarge, color = RBlue, fontWeight = FontWeight.Bold)
+            }
+            restore?.let { state ->
+                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = if (state.error == null) RBlueLight else RRedLight)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(if (state.error != null) "Restore failed" else if (state.finishedPath != null) "Restore complete" else "Restoring ${state.fileName}…", fontWeight = FontWeight.Bold, color = RText)
+                        state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = RRed) }
+                        if (state.running) { Spacer(Modifier.height(6.dp)); LinearProgressIndicator(progress = { state.fraction }, Modifier.fillMaxWidth()) }
+                        state.finishedPath?.let { Text("Saved to $it", style = MaterialTheme.typography.bodySmall, color = RGreen) }
                     }
                 }
             }
-            Spacer(Modifier.width(6.dp))
-            Button(
-                onClick = onRestore,
-                enabled = !busy,
-                shape = RoundedCornerShape(13.dp),
-                contentPadding = PaddingValues(horizontal = 13.dp, vertical = 9.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = RestoreBlue)
-            ) {
-                Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("Restore")
+            if (records.isEmpty()) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.CloudDownload, null, Modifier.size(48.dp), tint = RBlue.copy(.6f)); Spacer(Modifier.height(9.dp)); Text(if (query.isBlank()) "No uploaded files to restore" else "No files match your search", color = RSub) } }
+            } else {
+                LazyColumn(Modifier.weight(1f).padding(horizontal = 16.dp), contentPadding = PaddingValues(top = 6.dp, bottom = if (selected.isEmpty()) 20.dp else 92.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(records, key = { it.id }) { record ->
+                        RestoreRecordCard(record, record.id in selected, restore?.running == true || bulkRunning, { selected = if (record.id in selected) selected - record.id else selected + record.id }) { scope.launch { runCatching { repository.restoreFile(record) } } }
+                    }
+                }
+            }
+            if (selected.isNotEmpty()) Button(onClick = {
+                val targets = records.filter { it.id in selected }
+                bulkRunning = true; bulkDone = 0; bulkFailed = 0; bulkTotal = targets.size
+                scope.launch {
+                    for (record in targets) { runCatching { repository.restoreFile(record) }.onFailure { bulkFailed++ }; bulkDone++ }
+                    bulkRunning = false; selected = emptySet()
+                }
+            }, enabled = !bulkRunning && restore?.running != true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).height(54.dp), shape = RoundedCornerShape(18.dp), colors = ButtonDefaults.buttonColors(containerColor = RBlue)) {
+                Icon(Icons.Default.CloudDownload, null); Spacer(Modifier.width(8.dp)); Text(if (bulkRunning) "Restoring $bulkDone / $bulkTotal" else "Restore ${selected.size} selected", fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
-private fun categoryAccent(category: BackupCategory): Color = when (category) {
-    BackupCategory.PHOTOS -> RestoreGreen
-    BackupCategory.VIDEOS -> RestoreRed
-    BackupCategory.PDFS -> RestoreOrange
-    BackupCategory.WORD_EXCEL -> RestorePurple
-    BackupCategory.AUDIO -> RestoreCyan
-    BackupCategory.CALL_RECORDINGS -> RestoreBlue
-    BackupCategory.OTHER_FILES -> Color(0xFF64748B)
-}
-
-private fun categoryIcon(category: BackupCategory): androidx.compose.ui.graphics.vector.ImageVector = when (category) {
-    BackupCategory.PHOTOS -> Icons.Default.Image
-    BackupCategory.VIDEOS -> Icons.Default.PlayArrow
-    BackupCategory.PDFS, BackupCategory.WORD_EXCEL, BackupCategory.OTHER_FILES -> Icons.Default.Description
-    BackupCategory.AUDIO -> Icons.Default.PlayArrow
-    BackupCategory.CALL_RECORDINGS -> Icons.Default.PhoneAndroid
-}
+@Composable private fun PathCard(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, bg: Color, onClick: () -> Unit) { Card(onClick = onClick, Modifier.width(190.dp).height(146.dp), RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = bg), elevation = CardDefaults.cardElevation(0.dp)) { Box(Modifier.fillMaxSize().padding(16.dp)) { Surface(Modifier.size(48.dp), RoundedCornerShape(16.dp), Color.White.copy(.86f)) { Box(contentAlignment = Alignment.Center) { Icon(icon, null, tint = tint, Modifier.size(28.dp)) } }; Column(Modifier.padding(top = 58.dp).padding(end = 30.dp)) { Text(title, fontWeight = FontWeight.Bold, color = RText, style = MaterialTheme.typography.titleMedium); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(0xFF52627D)) }; Surface(Modifier.align(Alignment.BottomEnd).size(36.dp), RoundedCornerShape(50), Color.White.copy(.9f)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.ArrowForward, null, tint = tint) } } } } }
+@Composable private fun Chip(label: String, selected: Boolean, tint: Color, bg: Color, onClick: () -> Unit) { FilterChip(selected = selected, onClick = onClick, label = { Text(label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) }, shape = RoundedCornerShape(14.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = bg, selectedLabelColor = tint, containerColor = Color.White, labelColor = RSub), border = FilterChipDefaults.filterChipBorder(true, selected, Color(0xFFD9DEEA), tint)) }
+@Composable private fun RestoreRecordCard(record: FileRecord, checked: Boolean, busy: Boolean, onToggle: () -> Unit, onRestore: () -> Unit) { val context = LocalContext.current; val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }; var bitmap by remember(record.uri) { mutableStateOf(MediaThumbnails.peek(record)) }; LaunchedEffect(record.uri) { if (bitmap == null) bitmap = MediaThumbnails.load(context, record) }; val accent = categoryTint(record.category); Card(Modifier.fillMaxWidth(), RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) { Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) { Checkbox(checked, { onToggle() }, enabled = !busy); Box(Modifier.size(64.dp).clip(RoundedCornerShape(13.dp)).background(accent.copy(.12f)), Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), record.displayName, ContentScale.Crop, Modifier.fillMaxSize()) } ?: Text(extensionLabel(record.displayName), color = accent, style = MaterialTheme.typography.labelSmall) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(record.displayName, fontWeight = FontWeight.SemiBold, color = RText, maxLines = 1, overflow = TextOverflow.Ellipsis); Text("${formatBytes(record.sizeBytes)} • ${record.uploadedAtMillis?.let { fmt.format(Date(it)) } ?: "uploaded"}", style = MaterialTheme.typography.bodySmall, color = RSub); Surface(RoundedCornerShape(8.dp), accent.copy(.12f)) { Text(categoryLabel(record.category), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = accent, fontWeight = FontWeight.SemiBold) } }; Spacer(Modifier.width(6.dp)); Button(onClick = onRestore, enabled = !busy, shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = RBlue), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) { Icon(Icons.Default.CloudDownload, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Restore") } } } }
+private fun categoryLabel(c: BackupCategory) = when (c) { BackupCategory.PHOTOS -> "Photos"; BackupCategory.VIDEOS -> "Videos"; BackupCategory.PDFS -> "PDFs"; BackupCategory.WORD_EXCEL -> "Documents"; BackupCategory.AUDIO -> "Audio"; BackupCategory.CALL_RECORDINGS -> "Calls"; BackupCategory.OTHER_FILES -> "Other files" }
+private fun categoryTint(c: BackupCategory) = when (c) { BackupCategory.PHOTOS -> RGreen; BackupCategory.VIDEOS -> RRed; BackupCategory.PDFS -> ROrange; BackupCategory.WORD_EXCEL -> RPurple; BackupCategory.AUDIO -> RCyan; BackupCategory.CALL_RECORDINGS -> RBlue; BackupCategory.OTHER_FILES -> RCyan }
+private fun extensionLabel(name: String) = name.substringAfterLast('.', "FILE").uppercase(Locale.getDefault()).take(5)
+private fun formatBytes(bytes: Long) = when { bytes < 1024L -> "$bytes B"; bytes < 1024L * 1024L -> "%.1f KB".format(Locale.getDefault(), bytes / 1024.0); bytes < 1024L * 1024L * 1024L -> "%.1f MB".format(Locale.getDefault(), bytes / (1024.0 * 1024.0)); else -> "%.1f GB".format(Locale.getDefault(), bytes / (1024.0 * 1024.0 * 1024.0)) }
