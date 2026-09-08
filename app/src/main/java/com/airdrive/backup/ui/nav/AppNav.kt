@@ -1,9 +1,15 @@
 package com.airdrive.backup.ui.nav
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
@@ -27,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavType
@@ -94,37 +102,49 @@ fun AppNav(deepLinkRoute: String? = null) {
     val settings = remember { SettingsStore(context) }
     val navController = rememberNavController()
     var startDestination by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         combine(settings.onboardingDone, settings.telegramLoggedIn) { done, loggedIn -> done to loggedIn }.collect { (done, loggedIn) ->
-            if (startDestination == null) startDestination = when {
-                !done -> Routes.WELCOME
-                !loggedIn -> Routes.TELEGRAM_LOGIN
-                else -> Routes.DASHBOARD
+            if (startDestination == null) {
+                startDestination = when {
+                    !done -> Routes.WELCOME
+                    !loggedIn -> Routes.TELEGRAM_LOGIN
+                    else -> Routes.DASHBOARD
+                }
             }
         }
     }
+
     val resolved = startDestination
     if (resolved == null) {
-        Surface(Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+        LaunchScreen()
         return
     }
+
     LaunchedEffect(resolved, deepLinkRoute) {
-        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) runCatching { navController.navigate(deepLinkRoute) }
+        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) {
+            runCatching { navController.navigate(deepLinkRoute) }
+        }
     }
+
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-    val showBottomBar = bottomTabs.any { it.route == currentRoute }
+    val showBottomBar = currentRoute == Routes.BACKUP_PROGRESS || bottomTabs.any { it.route == currentRoute }
+    val selectedTabRoute = if (currentRoute == Routes.BACKUP_PROGRESS) Routes.DASHBOARD else currentRoute
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (showBottomBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
                 bottomTabs.forEach { tab ->
                     NavigationBarItem(
-                        selected = currentRoute == tab.route,
+                        selected = selectedTabRoute == tab.route,
                         onClick = {
-                            if (currentRoute != tab.route) navController.navigate(tab.route) {
-                                popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+                            if (currentRoute != tab.route) {
+                                navController.navigate(tab.route) {
+                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
                             }
                         },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
@@ -182,6 +202,34 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry ->
                 RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
             }
+        }
+    }
+}
+
+@Composable
+private fun LaunchScreen() {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                modifier = Modifier.size(88.dp),
+                shape = RoundedCornerShape(26.dp),
+                color = Color(0xFF2F6FEA),
+                shadowElevation = 12.dp
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Cloud, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp))
+                }
+            }
+            Spacer(Modifier.size(20.dp))
+            Text("AirDrive", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.size(5.dp))
+            Text("Your files. Backed up. Always with you.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.size(26.dp))
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp, color = Color(0xFF2F6FEA))
         }
     }
 }
