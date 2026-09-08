@@ -43,12 +43,11 @@ class TelegramChannelSync private constructor(private val context: Context) {
         for ((index, chatId) in channels.withIndex()) {
             try {
                 onProgress("Scanning channel ${index + 1}/${channels.size} • $chatId")
-                val files = tdClient.scanChannelFiles(chatId) { count ->
-                    scanned = scanned - (filesCountForChannelNotKnownYet(index)) + count
+                val channelFiles = tdClient.scanChannelFiles(chatId) { count ->
                     onProgress("Channel ${index + 1}/${channels.size} • scanned $count files")
                 }
-                // Persist this channel's entire inventory before moving to the next channel.
-                for (remote in files) {
+                scanned += channelFiles.size
+                for (remote in channelFiles) {
                     if (dao.findByTelegramMessage(remote.chatId, remote.messageId) != null) { existing++; continue }
                     val category = runCatching { BackupCategory.valueOf(remote.categoryName) }.getOrDefault(BackupCategory.OTHER_FILES)
                     val row = FileRecord(
@@ -67,26 +66,20 @@ class TelegramChannelSync private constructor(private val context: Context) {
                     )
                     if (dao.insert(row) != -1L) imported++ else existing++
                 }
-                scanned += files.size
-                onProgress("Channel ${index + 1}/${channels.size} complete • ${files.size} files")
-                // Checkpoint the manifest after every channel. If the app/process disappears,
-                // completed channels are already represented in Saved Messages.
+                onProgress("Channel ${index + 1}/${channels.size} complete • ${channelFiles.size} files • $imported added so far")
+                // A completed channel is checkpointed into Saved Messages before the next channel starts.
                 runCatching { ManifestSync.get(context).sync() }
             } catch (e: Exception) {
                 failed++
                 onProgress("Channel ${index + 1}/${channels.size} failed • ${e.message ?: "unknown error"}")
             }
         }
-        // Final authoritative manifest checkpoint after all channels.
+        // Final authoritative manifest checkpoint after all connected channels have been reconciled.
         runCatching { ManifestSync.get(context).sync() }
         val manifestEntries = dao.uploadedCount()
         onProgress("Inventory complete • $scanned files found • $imported added • $existing already indexed • $manifestEntries in manifest")
         ChannelSyncResult(channels.size, scanned, imported, existing, failed, manifestEntries)
     }
-
-    // Kept as a separate function so progress remains cheap and deterministic; the scanner's
-    // callback is informational while the final channel list is authoritative for totals.
-    private fun filesCountForChannelNotKnownYet(index: Int): Int = 0
 
     companion object {
         @Volatile private var instance: TelegramChannelSync? = null
