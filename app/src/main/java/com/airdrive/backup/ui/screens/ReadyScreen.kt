@@ -1,11 +1,19 @@
 package com.airdrive.backup.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -20,21 +28,20 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun ReadyScreen(nav: NavHostController) {
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember { BackupRepository.get(context) }
     val settings = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
-
     val progress by repository.progress.collectAsState()
     val lastScan by repository.lastScan.collectAsState()
     val destination by settings.destination.collectAsState(initial = null)
-
     var scanning by remember { mutableStateOf(true) }
     var fileCount by remember { mutableStateOf(0) }
     var totalBytes by remember { mutableStateOf(0L) }
     var scanNonce by remember { mutableStateOf(0) }
+    val blue = Color(0xFF2F6FEA)
+    val blueSoft = Color(0xFFEAF2FF)
 
-    // scan() hops to Dispatchers.IO itself, so launching it from here does not block the UI.
     LaunchedEffect(scanNonce) {
         scanning = true
         repository.scan()
@@ -44,130 +51,100 @@ fun ReadyScreen(nav: NavHostController) {
         scanning = false
     }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF7F9FD)) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(32.dp),
-            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Ready", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(76.dp).clip(CircleShape).background(blueSoft), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.CloudUpload, contentDescription = null, tint = blue, modifier = Modifier.size(38.dp))
+            }
+            Spacer(Modifier.height(18.dp))
+            Text(if (scanning) "Preparing your backup" else "Ready to back up", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
 
             if (scanning) {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    progress.statusText ?: "Scanning your storage…",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-                progress.currentFileName?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
+                CircularProgressIndicator(color = blue, modifier = Modifier.padding(vertical = 12.dp))
+                Text(progress.statusText ?: "Scanning your storage…", color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+                progress.currentFileName?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
             } else {
-                Text("Files to back up: $fileCount", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Estimated size: ${formatBytes(totalBytes)}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("$fileCount files ready", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text("Estimated size: ${formatBytes(totalBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(18.dp))
+                Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = Color.White) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(blueSoft), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = blue, modifier = Modifier.size(23.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Internal storage", fontWeight = FontWeight.SemiBold)
+                            Text(StorageAccess.describeRoots(context, includeRemovable = true), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
 
                 if (lastScan?.accessBlocked == true) {
-                    Spacer(Modifier.height(20.dp))
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer
-                        )
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                "Only picked folders were scanned",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Turn on “All files access” and AirDrive will back up every folder " +
-                                    "on the phone without you choosing any.",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Button(onClick = {
-                                if (!StorageAccess.openAllFilesAccess(context)) {
-                                    nav.navigate(Routes.STORAGE_ACCESS)
-                                }
+                    Spacer(Modifier.height(12.dp))
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer), shape = RoundedCornerShape(18.dp)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("Storage access is limited", fontWeight = FontWeight.Bold)
+                            Text("Allow full access so AirDrive can scan every folder.", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = {
+                                if (!StorageAccess.openAllFilesAccess(context)) nav.navigate(Routes.STORAGE_ACCESS)
                             }) { Text("Grant access") }
                         }
                     }
-                } else if (lastScan?.wholeDevice == true) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        StorageAccess.describeRoots(context, includeRemovable = true),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
                 }
 
-                Spacer(Modifier.height(32.dp))
-
-                // Last onboarding decision: without a destination the first backup would queue
-                // thousands of files and upload none of them.
                 if (destination?.needsSetup == true) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer
-                        )
-                    ) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(
-                                "Where should backups go?",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "Saved Messages needs no setup at all. You can switch to channels " +
-                                    "later without losing anything.",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            Button(onClick = {
-                                scope.launch {
-                                    settings.setDestinationMode(DestinationMode.SAVED_MESSAGES)
-                                }
-                            }) { Text("Use Saved Messages") }
-                            TextButton(onClick = { nav.navigate(Routes.DESTINATION) }) {
-                                Text("Choose a channel instead")
+                    Spacer(Modifier.height(12.dp))
+                    Card(colors = CardDefaults.cardColors(containerColor = blueSoft), shape = RoundedCornerShape(18.dp)) {
+                        Column(Modifier.padding(14.dp)) {
+                            Text("Choose your backup destination", fontWeight = FontWeight.Bold)
+                            Text("Saved Messages is ready to use, or choose a channel.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { scope.launch { settings.setDestinationMode(DestinationMode.SAVED_MESSAGES) } }) { Text("Use Saved Messages") }
+                                TextButton(onClick = { nav.navigate(Routes.DESTINATION) }) { Text("Choose channel") }
                             }
                         }
                     }
-                    Spacer(Modifier.height(20.dp))
                 }
+            }
 
+            Spacer(Modifier.weight(1f))
+            if (!scanning) {
                 Button(
                     onClick = {
                         scope.launch {
                             settings.setOnboardingDone(true)
                             WorkScheduler.rescheduleAutoBackup(context)
                             WorkScheduler.runNow(context)
-                            nav.navigate(Routes.BACKUP_PROGRESS) {
-                                popUpTo(Routes.WELCOME) { inclusive = true }
+                            // Put the real Home destination underneath progress. This prevents
+                            // Back from returning to Ready and triggering another storage scan.
+                            nav.navigate(Routes.DASHBOARD) {
+                                popUpTo(Routes.READY) { inclusive = true }
+                                launchSingleTop = true
                             }
+                            nav.navigate(Routes.BACKUP_PROGRESS)
                         }
                     },
                     enabled = destination?.needsSetup == false,
-                    modifier = Modifier.fillMaxWidth().height(52.dp)
-                ) { Text("Start First Backup") }
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = blue)
+                ) {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start first backup", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = { scanNonce++ }) { Text("Scan again") }
             }
+            Text("Your backup runs safely in the background.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
