@@ -2,10 +2,11 @@ package com.airdrive.backup.data.backup
 
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.edit as dataStoreEdit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -41,20 +42,39 @@ class TelegramSyncStateStore(private val context: Context) {
     }
 
     suspend fun running(channels: Int, status: String) = edit {
-        this[Keys.RUNNING] = true; this[Keys.CHANNELS] = channels; this[Keys.STATUS] = status
+        this[Keys.RUNNING] = true
+        this[Keys.CHANNELS] = channels
+        this[Keys.STATUS] = status
     }
+
     suspend fun progress(currentChannel: Int, filesFound: Int, status: String) = edit {
-        this[Keys.RUNNING] = true; this[Keys.CURRENT_CHANNEL] = currentChannel; this[Keys.FILES_FOUND] = filesFound; this[Keys.STATUS] = status
+        this[Keys.RUNNING] = true
+        this[Keys.CURRENT_CHANNEL] = currentChannel
+        this[Keys.FILES_FOUND] = filesFound
+        this[Keys.STATUS] = status
     }
+
     suspend fun complete(channels: Int, filesFound: Int, imported: Int, already: Int, failed: Int, manifest: Int, status: String) = edit {
-        this[Keys.RUNNING] = false; this[Keys.CHANNELS] = channels; this[Keys.CURRENT_CHANNEL] = channels; this[Keys.FILES_FOUND] = filesFound
-        this[Keys.IMPORTED] = imported; this[Keys.ALREADY] = already; this[Keys.FAILED] = failed; this[Keys.MANIFEST] = manifest
-        this[Keys.STATUS] = status; this[Keys.FINISHED_AT] = System.currentTimeMillis()
+        this[Keys.RUNNING] = false
+        this[Keys.CHANNELS] = channels
+        this[Keys.CURRENT_CHANNEL] = channels
+        this[Keys.FILES_FOUND] = filesFound
+        this[Keys.IMPORTED] = imported
+        this[Keys.ALREADY] = already
+        this[Keys.FAILED] = failed
+        this[Keys.MANIFEST] = manifest
+        this[Keys.STATUS] = status
+        this[Keys.FINISHED_AT] = System.currentTimeMillis()
     }
-    suspend fun failed(status: String) = edit { this[Keys.RUNNING] = false; this[Keys.STATUS] = status; this[Keys.FINISHED_AT] = System.currentTimeMillis() }
+
+    suspend fun failed(status: String) = edit {
+        this[Keys.RUNNING] = false
+        this[Keys.STATUS] = status
+        this[Keys.FINISHED_AT] = System.currentTimeMillis()
+    }
 
     private suspend fun edit(block: androidx.datastore.preferences.core.MutablePreferences.() -> Unit) {
-        context.telegramSyncStore.edit { block() }
+        context.telegramSyncStore.dataStoreEdit { preferences -> block(preferences) }
     }
 
     private object Keys {
@@ -67,6 +87,6 @@ class TelegramSyncStateStore(private val context: Context) {
         val ALREADY = intPreferencesKey("already_indexed")
         val MANIFEST = intPreferencesKey("manifest_entries")
         val FAILED = intPreferencesKey("failed_channels")
-        val FINISHED_AT = androidx.datastore.preferences.core.longPreferencesKey("finished_at")
+        val FINISHED_AT = longPreferencesKey("finished_at")
     }
 }
