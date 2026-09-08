@@ -93,8 +93,8 @@ class TelegramChannelSyncWorker(appContext: Context, params: WorkerParameters) :
 
     private fun foregroundInfo(notification: android.app.Notification): ForegroundInfo =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(NotificationHelper.MIGRATION_NOTIFICATION_ID + 1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            ForegroundInfo(NotificationHelper.MIGRATION_NOTIFICATION_ID + 2, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            ForegroundInfo(NotificationHelper.MIGRATION_NOTIFICATION_ID + 1, notification)
+            ForegroundInfo(NotificationHelper.MIGRATION_NOTIFICATION_ID + 2, notification)
         }
 }
