@@ -143,13 +143,13 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
             composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
             composable(Routes.SETTINGS) { SettingsOverviewScreen(navController) }
-            composable(Routes.RESTORE) { RestoreScreen(navController) }
+            composable(Routes.RESTORE) { RestoreAllScreen(navController) }
             composable(Routes.FAILED_UPLOADS) { FailedUploadsScreen(navController) }
             composable(Routes.ABOUT) { AboutScreen(navController) }
             composable(Routes.TIMELINE) { BackupTimelineScreen(navController) }
             composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
             composable(Routes.SEARCH) { SearchScreen(navController) }
-            composable(Routes.GALLERY) { GalleryScreen(navController) }
+            composable(Routes.GALLERY) { IncrementalGalleryScreen(navController) }
             composable("${Routes.CATEGORY_DETAIL}/{category}", arguments = listOf(navArgument("category") { type = NavType.StringType })) { entry ->
                 val categoryName = entry.arguments?.getString("category")
                 val category = BackupCategory.values().find { it.name == categoryName } ?: BackupCategory.OTHER_FILES
