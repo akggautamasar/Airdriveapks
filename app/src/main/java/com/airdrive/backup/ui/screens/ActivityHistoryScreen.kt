@@ -42,7 +42,6 @@ private val AGreenLight = Color(0xFFDDF6EC)
 private val AOrange = Color(0xFFF59E0B)
 private val AOrangeLight = Color(0xFFFFEBD0)
 private val ARed = Color(0xFFE84A5F)
-private val ARedLight = Color(0xFFFFE1E6)
 private val ABg = Color(0xFFF7F9FD)
 private val AText = Color(0xFF17213B)
 private val ASub = Color(0xFF6E7788)
@@ -71,73 +70,51 @@ fun ActivityHistoryScreen(nav: NavHostController) {
         )
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp), RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(Modifier.size(46.dp), RoundedCornerShape(14.dp), ABlueLight) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.History, null, tint = ABlue) } }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text("Backup activity", fontWeight = FontWeight.Bold, color = AText); Text("${activity.size} recent records shown", style = MaterialTheme.typography.bodySmall, color = ASub) }
-                    Surface(RoundedCornerShape(10.dp), AGreenLight) { Text("Live", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = AGreen, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
+                    Surface(modifier = Modifier.size(46.dp), shape = RoundedCornerShape(14.dp), color = ABlueLight) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.History, null, tint = ABlue) } }
+                    Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Backup activity", fontWeight = FontWeight.Bold, color = AText); Text("${activity.size} recent records shown", style = MaterialTheme.typography.bodySmall, color = ASub) }
+                    Surface(shape = RoundedCornerShape(10.dp), color = AGreenLight) { Text("Live", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = AGreen, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
                 }
             }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = query, onValueChange = { query = it }, leadingIcon = { Icon(Icons.Default.Search, null, tint = Color(0xFF596579)) }, placeholder = { Text("Search by file name") }, singleLine = true, shape = RoundedCornerShape(16.dp), colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White, focusedContainerColor = Color.White, unfocusedBorderColor = Color(0xFFD9DEEA), focusedBorderColor = ABlue), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(58.dp))
             Spacer(Modifier.height(9.dp))
-            FilterRow {
-                ActivityChip("All categories", categoryFilter == null, ABlue, ABlueLight) { categoryFilter = null }
-                BackupCategory.values().forEach { category -> ActivityChip(categoryLabel(category), categoryFilter == category, categoryTint(category), categoryTint(category).copy(alpha = .12f)) { categoryFilter = if (categoryFilter == category) null else category } }
-            }
+            FilterRow { ActivityChip("All categories", categoryFilter == null, ABlue, ABlueLight) { categoryFilter = null }; BackupCategory.values().forEach { category -> ActivityChip(categoryLabel(category), categoryFilter == category, categoryTint(category), categoryTint(category).copy(alpha = .12f)) { categoryFilter = if (categoryFilter == category) null else category } } }
             Spacer(Modifier.height(7.dp))
-            FilterRow {
-                ActivityChip("All", filter == null, ABlue, ABlueLight) { filter = null }
-                UploadStatus.values().forEach { status -> ActivityChip(statusLabel(status), filter == status, statusTint(status), statusTint(status).copy(alpha = .12f)) { filter = if (filter == status) null else status } }
-            }
+            FilterRow { ActivityChip("All", filter == null, ABlue, ABlueLight) { filter = null }; UploadStatus.values().forEach { status -> ActivityChip(statusLabel(status), filter == status, statusTint(status), statusTint(status).copy(alpha = .12f)) { filter = if (filter == status) null else status } } }
             Spacer(Modifier.height(8.dp))
-            if (activity.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.History, null, Modifier.size(48.dp), tint = ABlue.copy(.55f)); Spacer(Modifier.height(8.dp)); Text("Nothing matches those filters", color = ASub) } }
-            else LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(activity, key = { it.id }) { record -> ActivityCard(record, repository, scope) }
-            }
+            if (activity.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.History, null, Modifier.size(48.dp), tint = ABlue.copy(alpha = .55f)); Spacer(Modifier.height(8.dp)); Text("Nothing matches those filters", color = ASub) } }
+            else LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(top = 2.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(activity, key = { it.id }) { record -> ActivityCard(record, repository, scope) } }
         }
     }
 }
 
 @Composable private fun FilterRow(content: @Composable RowScope.() -> Unit) { Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = content) }
-@Composable private fun ActivityChip(label: String, selected: Boolean, tint: Color, bg: Color, onClick: () -> Unit) { FilterChip(selected = selected, onClick = onClick, label = { Text(label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) }, shape = RoundedCornerShape(13.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = bg, selectedLabelColor = tint, containerColor = Color.White, labelColor = ASub), border = FilterChipDefaults.filterChipBorder(true, selected, Color(0xFFD9DEEA), tint)) }
+@Composable private fun ActivityChip(label: String, selected: Boolean, tint: Color, bg: Color, onClick: () -> Unit) { FilterChip(selected = selected, onClick = onClick, label = { Text(label, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) }, shape = RoundedCornerShape(13.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = bg, selectedLabelColor = tint, containerColor = Color.White, labelColor = ASub), border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selected, borderColor = Color(0xFFD9DEEA), selectedBorderColor = tint)) }
 
-@Composable
-private fun ActivityCard(record: FileRecord, repository: BackupRepository, scope: kotlinx.coroutines.CoroutineScope) {
-    val context = LocalContext.current
-    val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
-    val showsThumbnail = record.category == BackupCategory.PHOTOS || record.category == BackupCategory.VIDEOS
+@Composable private fun ActivityCard(record: FileRecord, repository: BackupRepository, scope: kotlinx.coroutines.CoroutineScope) {
+    val context = LocalContext.current; val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }; val showsThumbnail = record.category == BackupCategory.PHOTOS || record.category == BackupCategory.VIDEOS
     var bitmap by remember(record.uri) { mutableStateOf(if (showsThumbnail) MediaThumbnails.peek(record) else null) }
     LaunchedEffect(record.uri, showsThumbnail) { if (showsThumbnail && bitmap == null) bitmap = MediaThumbnails.load(context, record) }
     val tint = statusTint(record.status)
-    Card(Modifier.fillMaxWidth(), RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
         Row(Modifier.fillMaxWidth().padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(52.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFFF0F3F8)), Alignment.Center) {
-                bitmap?.let { Image(it.asImageBitmap(), record.displayName, ContentScale.Crop, Modifier.fillMaxSize()) } ?: Text(record.displayName.substringAfterLast('.', "FILE").uppercase(Locale.getDefault()).take(5), style = MaterialTheme.typography.labelSmall, color = ASub)
-            }
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
+            Box(Modifier.size(52.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFFF0F3F8)), contentAlignment = Alignment.Center) { bitmap?.let { Image(bitmap = it.asImageBitmap(), contentDescription = record.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) } ?: Text(record.displayName.substringAfterLast('.', "FILE").uppercase(Locale.getDefault()).take(5), style = MaterialTheme.typography.labelSmall, color = ASub) }
+            Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) {
                 Text(record.displayName, fontWeight = FontWeight.SemiBold, color = AText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${formatBytes(record.sizeBytes)} • ${fmt.format(Date(record.uploadedAtMillis ?: record.addedAtMillis))}", style = MaterialTheme.typography.bodySmall, color = ASub)
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Surface(RoundedCornerShape(8.dp), tint.copy(alpha = .11f)) { Text(categoryLabel(record.category), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = categoryTint(record.category), fontWeight = FontWeight.SemiBold) }
-                    Surface(RoundedCornerShape(8.dp), tint.copy(alpha = .11f)) { Text(statusLabel(record.status), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = tint, fontWeight = FontWeight.SemiBold) }
+                Text("${com.airdrive.backup.ui.screens.formatBytes(record.sizeBytes)} • ${fmt.format(Date(record.uploadedAtMillis ?: record.addedAtMillis))}", style = MaterialTheme.typography.bodySmall, color = ASub)
+                Spacer(Modifier.height(4.dp)); Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Surface(shape = RoundedCornerShape(8.dp), color = tint.copy(alpha = .11f)) { Text(categoryLabel(record.category), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = categoryTint(record.category), fontWeight = FontWeight.SemiBold) }
+                    Surface(shape = RoundedCornerShape(8.dp), color = tint.copy(alpha = .11f)) { Text(statusLabel(record.status), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = tint, fontWeight = FontWeight.SemiBold) }
                 }
                 record.lastError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = ARed, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
             }
-            when (record.status) {
-                UploadStatus.PENDING, UploadStatus.UPLOADING -> TextButton(onClick = { scope.launch { repository.cancelUpload(record.id) } }) { Text("Cancel", color = ABlue) }
-                UploadStatus.CANCELLED -> TextButton(onClick = { scope.launch { repository.requeueCancelled(record.id) } }) { Text("Retry", color = ABlue) }
-                else -> Icon(Icons.Default.Upload, null, tint = tint.copy(.7f), modifier = Modifier.size(20.dp))
-            }
+            when (record.status) { UploadStatus.PENDING, UploadStatus.UPLOADING -> TextButton(onClick = { scope.launch { repository.cancelUpload(record.id) } }) { Text("Cancel", color = ABlue) }; UploadStatus.CANCELLED -> TextButton(onClick = { scope.launch { repository.requeueCancelled(record.id) } }) { Text("Retry", color = ABlue) }; else -> Icon(Icons.Default.Upload, null, tint = tint.copy(alpha = .7f), modifier = Modifier.size(20.dp)) }
         }
     }
 }
 
 private fun statusLabel(status: UploadStatus): String = when (status) { UploadStatus.UPLOADED -> "Uploaded"; UploadStatus.FAILED -> "Failed"; UploadStatus.UPLOADING -> "Uploading"; UploadStatus.PENDING -> "Pending"; UploadStatus.SKIPPED -> "Skipped"; UploadStatus.CANCELLED -> "Cancelled" }
 private fun statusTint(status: UploadStatus): Color = when (status) { UploadStatus.UPLOADED -> AGreen; UploadStatus.FAILED -> ARed; UploadStatus.UPLOADING -> ABlue; UploadStatus.PENDING -> AOrange; UploadStatus.SKIPPED -> ASub; UploadStatus.CANCELLED -> APurple }
-private fun categoryLabel(category: BackupCategory): String = when (category) { BackupCategory.PHOTOS -> "Photos"; BackupCategory.VIDEOS -> "Videos"; BackupCategory.PDFS -> "PDFs"; BackupCategory.WORD_EXCEL -> "Documents"; BackupCategory.AUDIO -> "Audio"; BackupCategory.CALL_RECORDINGS -> "Calls"; BackupCategory.OTHER_FILES -> "Other files" }
 private fun categoryTint(category: BackupCategory): Color = when (category) { BackupCategory.PHOTOS -> AGreen; BackupCategory.VIDEOS -> ARed; BackupCategory.PDFS -> AOrange; BackupCategory.WORD_EXCEL -> APurple; BackupCategory.AUDIO -> Color(0xFF18B8C8); BackupCategory.CALL_RECORDINGS -> ABlue; BackupCategory.OTHER_FILES -> Color(0xFF18B8C8) }
-private fun formatBytes(bytes: Long): String = when { bytes < 1024L -> "$bytes B"; bytes < 1024L * 1024L -> "%.1f KB".format(Locale.getDefault(), bytes / 1024.0); bytes < 1024L * 1024L * 1024L -> "%.1f MB".format(Locale.getDefault(), bytes / (1024.0 * 1024.0)); else -> "%.1f GB".format(Locale.getDefault(), bytes / (1024.0 * 1024.0 * 1024.0)) }
