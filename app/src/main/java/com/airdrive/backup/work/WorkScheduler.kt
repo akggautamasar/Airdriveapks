@@ -20,59 +20,69 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
-/** Key BackupWorker reads to restrict a manual run to a single category; absent = every category. */
 const val WORK_INPUT_CATEGORY = "category_filter"
-
-/**
- * Key BackupWorker reads to label the run on the timeline. Absent means the periodic scheduler
- * started it, since only the buttons below set it explicitly.
- */
 const val WORK_INPUT_TRIGGER = "run_trigger"
-
-/** Keys MigrationWorker reads: which categories to pull down, comma-joined enum names. */
 const val WORK_INPUT_MIGRATION_CATEGORIES = "migration_categories"
-
-/** Key MigrationWorker reads to decide whether files already pulled down are fetched again. */
 const val WORK_INPUT_MIGRATION_SKIP = "migration_skip_restored"
 
 object WorkScheduler {
     private const val MANUAL_WORK_NAME = "airdrive_manual_backup"
     private const val AUTO_WORK_NAME = "airdrive_auto_backup"
     private const val MIGRATION_WORK_NAME = "airdrive_migration"
-
-    /** Process-lifetime scope: reading settings suspends, but onClick handlers cannot. */
+    private const val TELEGRAM_IMPORT_WORK_NAME = "airdrive_telegram_import"
+    private const val TELEGRAM_AUTO_SYNC_WORK_NAME = "airdrive_telegram_auto_sync"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    /** Fire-and-forget version for buttons. */
-    fun runNow(context: Context) {
-        scope.launch { runNowAwait(context) }
-    }
+    fun runNow(context: Context) { scope.launch { runNowAwait(context) } }
+    fun runNowCategory(context: Context, category: BackupCategory) { scope.launch { runNowAwait(context, category) } }
 
-    /** Same as [runNow] but restricted to one category — the per-category "Upload" buttons. */
-    fun runNowCategory(context: Context, category: BackupCategory) {
-        scope.launch { runNowAwait(context, category) }
-    }
-
-    /**
-     * Kicks off a manual run under the user's own network policy. The previous version always
-     * used NetworkType.CONNECTED, so "Wi-Fi only" was quietly ignored by "Back up now" and people
-     * burned mobile data. Charging is deliberately *not* required here: the user asked for it now.
-     */
     suspend fun runNowAwait(context: Context, category: BackupCategory? = null) {
         val policy = SettingsStore(context).networkPolicy.first()
-        val input = Data.Builder()
-            .putString(WORK_INPUT_TRIGGER, if (category == null) "MANUAL" else "CATEGORY")
+        val input = Data.Builder().putString(WORK_INPUT_TRIGGER, if (category == null) "MANUAL" else "CATEGORY")
         if (category != null) input.putString(WORK_INPUT_CATEGORY, category.name)
         val request = OneTimeWorkRequestBuilder<BackupWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(networkTypeFor(policy)).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-            .setInputData(input.build())
-            .build()
-        // REPLACE, not KEEP: with KEEP a finished-but-still-registered run made "Back up now"
-        // silently do nothing, which looked exactly like the app being stuck.
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+            .setInputData(input.build()).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
     }
+
+    /** One click starts a durable foreground WorkManager job. KEEP prevents a second tap from restarting it. */
+    fun importTelegramChannels(context: Context) {
+        scope.launch { importTelegramChannelsAwait(context) }
+    }
+
+    suspend fun importTelegramChannelsAwait(context: Context) {
+        val policy = SettingsStore(context).networkPolicy.first()
+        val request = OneTimeWorkRequestBuilder<TelegramChannelSyncWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(networkTypeFor(policy)).build())
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            TELEGRAM_IMPORT_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+    }
+
+    /** Keeps connected channels reconciled automatically after the initial full import. */
+    fun rescheduleTelegramAutoSync(context: Context) {
+        scope.launch {
+            val policy = SettingsStore(context).networkPolicy.first()
+            val request = PeriodicWorkRequestBuilder<TelegramChannelSyncWorker>(6, TimeUnit.HOURS)
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(networkTypeFor(policy)).build())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES)
+                .build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                TELEGRAM_AUTO_SYNC_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+        }
+    }
+
+    fun telegramImportWorkInfo(context: Context) =
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkLiveData(TELEGRAM_IMPORT_WORK_NAME)
 
     private fun networkTypeFor(policy: NetworkPolicy): NetworkType = when (policy) {
         NetworkPolicy.WIFI_ONLY -> NetworkType.UNMETERED
@@ -80,80 +90,35 @@ object WorkScheduler {
         NetworkPolicy.ANY -> NetworkType.CONNECTED
     }
 
-    // ---- device-to-device migration
-
-    /** Fire-and-forget for the "Start restore" button, which cannot suspend. */
     fun startMigration(context: Context, categories: Set<BackupCategory>, skipRestored: Boolean) {
         if (categories.isEmpty()) return
         scope.launch { startMigrationAwait(context, categories, skipRestored) }
     }
-
-    /**
-     * Restoring a phone takes hours, so it belongs in a worker rather than in a coroutine that dies
-     * with the app: WorkManager keeps it alive across process death and gives it a foreground
-     * notification. Network policy is respected — a 40 GB restore over mobile data would be a
-     * genuinely expensive surprise — but charging is not required, because the user asked for this
-     * now and a migration that silently waits for a cable looks broken.
-     */
-    suspend fun startMigrationAwait(
-        context: Context,
-        categories: Set<BackupCategory>,
-        skipRestored: Boolean
-    ) {
+    suspend fun startMigrationAwait(context: Context, categories: Set<BackupCategory>, skipRestored: Boolean) {
         if (categories.isEmpty()) return
         val policy = SettingsStore(context).networkPolicy.first()
         val input = Data.Builder()
             .putString(WORK_INPUT_MIGRATION_CATEGORIES, categories.joinToString(",") { it.name })
-            .putBoolean(WORK_INPUT_MIGRATION_SKIP, skipRestored)
-            .build()
+            .putBoolean(WORK_INPUT_MIGRATION_SKIP, skipRestored).build()
         val request = OneTimeWorkRequestBuilder<MigrationWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(networkTypeFor(policy)).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-            .setInputData(input)
-            .build()
-        // REPLACE for the same reason as a manual backup: a stale finished entry must never make
-        // "Start restore" do nothing. Re-enqueueing is harmless, since a migration is resumable.
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(MIGRATION_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
+            .setInputData(input).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(MIGRATION_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
     }
-
-    /** Stops the migration after the file currently in flight. Restored files stay restored. */
-    fun cancelMigration(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(MIGRATION_WORK_NAME)
-    }
-
-    /** Live state of the manual run, so the UI can show whether anything is actually queued. */
-    fun manualWorkInfo(context: Context) =
-        WorkManager.getInstance(context).getWorkInfosForUniqueWorkLiveData(MANUAL_WORK_NAME)
-
-    fun pauseManual(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(MANUAL_WORK_NAME)
-    }
+    fun cancelMigration(context: Context) { WorkManager.getInstance(context).cancelUniqueWork(MIGRATION_WORK_NAME) }
+    fun manualWorkInfo(context: Context) = WorkManager.getInstance(context).getWorkInfosForUniqueWorkLiveData(MANUAL_WORK_NAME)
+    fun pauseManual(context: Context) { WorkManager.getInstance(context).cancelUniqueWork(MANUAL_WORK_NAME) }
 
     suspend fun rescheduleAutoBackup(context: Context) {
-        val settings = SettingsStore(context)
-        val manager = WorkManager.getInstance(context)
-
-        if (!settings.autoBackupEnabled.first()) {
-            manager.cancelUniqueWork(AUTO_WORK_NAME)
-            return
-        }
-
-        val chargingOnly = settings.chargingOnly.first()
-        val batteryConscious = settings.batteryConscious.first()
-        val frequencyHours = settings.backupFrequencyHours.first().coerceAtLeast(1)
-
+        val settings = SettingsStore(context); val manager = WorkManager.getInstance(context)
+        if (!settings.autoBackupEnabled.first()) { manager.cancelUniqueWork(AUTO_WORK_NAME); return }
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(networkTypeFor(settings.networkPolicy.first()))
-            .setRequiresCharging(chargingOnly)
-            .setRequiresBatteryNotLow(batteryConscious)
-            .build()
-
-        val request = PeriodicWorkRequestBuilder<BackupWorker>(frequencyHours, TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES)
-            .build()
-
+            .setRequiresCharging(settings.chargingOnly.first())
+            .setRequiresBatteryNotLow(settings.batteryConscious.first()).build()
+        val request = PeriodicWorkRequestBuilder<BackupWorker>(settings.backupFrequencyHours.first().coerceAtLeast(1), TimeUnit.HOURS)
+            .setConstraints(constraints).setBackoffCriteria(BackoffPolicy.LINEAR, 1, TimeUnit.MINUTES).build()
         manager.enqueueUniquePeriodicWork(AUTO_WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
 }
