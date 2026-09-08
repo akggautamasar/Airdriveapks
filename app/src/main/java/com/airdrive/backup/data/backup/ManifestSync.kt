@@ -20,7 +20,6 @@ import java.util.zip.GZIPOutputStream
  * index that survives uninstall/reinstall.
  */
 class ManifestSync(private val context: Context) {
-
     private val tag = "AirDrive.Manifest"
     private val dao = AppDatabase.get(context).fileRecordDao()
     private val settings = SettingsStore(context)
@@ -29,7 +28,6 @@ class ManifestSync(private val context: Context) {
     suspend fun sync(): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!tdClient.awaitReady(15_000)) return@withContext false
-
             val records = mutableListOf<FileRecord>()
             var offset = 0
             while (true) {
@@ -42,56 +40,34 @@ class ManifestSync(private val context: Context) {
                 Log.i(tag, "nothing uploaded yet, skipping manifest sync")
                 return@withContext true
             }
-
             val dest = settings.destination.first()
             val template = settings.captionTemplate.first()
-            val manifest = BackupManifest.fromRecords(
-                records = records,
-                destinationMode = dest.mode,
-                singleChatId = dest.singleChatId,
-                perCategoryChannels = dest.perCategory,
-                captionTemplate = template
-            )
-
+            val manifest = BackupManifest.fromRecords(records, dest.mode, dest.singleChatId, dest.perCategory, template)
             val file = writeGzipped(manifest.toJson())
             val chatId = tdClient.savedMessagesChatId()
             val caption = "$MANIFEST_MARKER\n" +
                 "🔒 AirDrive Backup Data — DO NOT DELETE\n" +
                 "${manifest.entryCount} file(s) tracked • updated automatically after every backup run.\n" +
-                "This message lets AirDrive recognise your backed-up files again if you " +
-                "reinstall the app. Deleting it just means a reinstall will re-scan instead " +
-                "of remembering — your uploaded files themselves are unaffected either way."
-
+                "This message lets AirDrive recognise your backed-up files again if you reinstall the app. " +
+                "Deleting it just means a reinstall will re-scan instead of remembering — your uploaded files themselves are unaffected either way."
             val cached = settings.manifestLocation.first()
             var edited = false
             if (cached != null) {
-                edited = runCatching {
-                    tdClient.editMessageDocument(cached.first, cached.second, file.absolutePath, caption)
-                }.isSuccess
+                edited = runCatching { tdClient.editMessageDocument(cached.first, cached.second, file.absolutePath, caption) }.isSuccess
             }
-
             if (!edited) {
                 val existing = runCatching { tdClient.findLatestOwnDocument(MANIFEST_MARKER) }.getOrNull()
                 if (existing != null) {
-                    edited = runCatching {
-                        tdClient.editMessageDocument(chatId, existing.id, file.absolutePath, caption)
-                    }.isSuccess
+                    edited = runCatching { tdClient.editMessageDocument(chatId, existing.id, file.absolutePath, caption) }.isSuccess
                     if (edited) settings.setManifestLocation(chatId, existing.id)
                 }
             }
-
             if (!edited) {
-                val messageId = tdClient.uploadFile(
-                    localPath = file.absolutePath,
-                    chatId = chatId,
-                    caption = caption,
-                    sizeBytes = file.length()
-                )
+                val messageId = tdClient.uploadFile(file.absolutePath, chatId, caption, file.length())
                 settings.setManifestLocation(chatId, messageId)
                 runCatching { tdClient.pinMessage(chatId, messageId) }
                     .onFailure { Log.w(tag, "could not pin manifest message: ${it.message}") }
             }
-
             file.delete()
             Log.i(tag, "manifest synced: ${manifest.entryCount} file(s)")
             true
@@ -101,28 +77,22 @@ class ManifestSync(private val context: Context) {
         }
     }
 
-    /**
-     * Reads the latest AirDrive manifest from Telegram and merges every entry into Room.
-     * This intentionally does not require an empty database: it is used to repair/reconcile an
-     * existing install where Telegram already knows about files that the local database missed.
-     */
+    /** Reads the latest manifest and merges entries missing from the local Room inventory. */
     suspend fun reconcileAvailableManifest(): Int = withContext(Dispatchers.IO) {
         try {
             if (!tdClient.awaitReady(30_000)) return@withContext 0
             val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER) ?: return@withContext 0
             settings.setManifestLocation(message.chatId, message.id)
             val downloaded = tdClient.downloadFile(message)
-            val manifest = readGzipped(File(downloaded.path))
+            val manifest = BackupManifest.parse(readGzipped(File(downloaded.path)))
             val rows = manifest.entries.filter { it.chatId != 0L && it.messageId != 0L }
             var inserted = 0
             rows.chunked(200).forEach { chunk ->
                 val missing = chunk.filter { dao.findByTelegramMessage(it.chatId, it.messageId) == null }
-                if (missing.isNotEmpty()) inserted += dao.insertRestored(missing.map { it.toUploadedRecord() }).count { it != -1L }
+                if (missing.isNotEmpty()) {
+                    inserted += dao.insertRestored(missing.map { it.toUploadedRecord() }).count { it != -1L }
+                }
             }
-            if (manifest.singleChatId != 0L) settings.setSingleChatId(manifest.singleChatId)
-            if (manifest.perCategoryChannels.isNotEmpty()) settings.setChannels(manifest.perCategoryChannels)
-            settings.setDestinationMode(manifest.destinationMode)
-            if (manifest.captionTemplate.isNotBlank()) settings.setCaptionTemplate(manifest.captionTemplate)
             File(downloaded.path).delete()
             Log.i(tag, "manifest reconciliation imported $inserted missing file(s) from ${rows.size} entries")
             inserted
@@ -136,26 +106,18 @@ class ManifestSync(private val context: Context) {
         try {
             if (!force && dao.totalRowCount() > 0) return@withContext RestoreResult.NothingToDo
             if (!tdClient.awaitReady(30_000)) return@withContext RestoreResult.NotSignedIn
-
-            val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER)
-                ?: return@withContext RestoreResult.NoManifestFound
-
+            val message = tdClient.findLatestOwnDocument(MANIFEST_MARKER) ?: return@withContext RestoreResult.NoManifestFound
             settings.setManifestLocation(message.chatId, message.id)
             val downloaded = tdClient.downloadFile(message)
             val json = readGzipped(File(downloaded.path))
             val manifest = BackupManifest.parse(json)
-
             val rows = manifest.entries.map { it.toUploadedRecord() }
             var inserted = 0
-            rows.chunked(200).forEach { chunk ->
-                inserted += dao.insertRestored(chunk).count { it != -1L }
-            }
-
+            rows.chunked(200).forEach { chunk -> inserted += dao.insertRestored(chunk).count { it != -1L } }
             if (manifest.singleChatId != 0L) settings.setSingleChatId(manifest.singleChatId)
             if (manifest.perCategoryChannels.isNotEmpty()) settings.setChannels(manifest.perCategoryChannels)
             settings.setDestinationMode(manifest.destinationMode)
             if (manifest.captionTemplate.isNotBlank()) settings.setCaptionTemplate(manifest.captionTemplate)
-
             Log.i(tag, "restored $inserted file(s) from manifest dated ${manifest.generatedAtMillis}")
             RestoreResult.Restored(inserted, manifest.generatedAtMillis)
         } catch (e: Exception) {
@@ -167,16 +129,12 @@ class ManifestSync(private val context: Context) {
     private fun writeGzipped(json: JSONObject): File {
         val dir = File(context.cacheDir, "manifest").apply { mkdirs() }
         val file = File(dir, "airdrive-manifest.json.gz")
-        GZIPOutputStream(file.outputStream()).use { gz ->
-            gz.write(json.toString().toByteArray(Charsets.UTF_8))
-        }
+        GZIPOutputStream(file.outputStream()).use { gz -> gz.write(json.toString().toByteArray(Charsets.UTF_8)) }
         return file
     }
 
-    private fun readGzipped(file: File): JSONObject {
-        val text = GZIPInputStream(file.inputStream()).use { it.readBytes() }.toString(Charsets.UTF_8)
-        return JSONObject(text)
-    }
+    private fun readGzipped(file: File): JSONObject =
+        JSONObject(GZIPInputStream(file.inputStream()).use { it.readBytes() }.toString(Charsets.UTF_8))
 
     sealed class RestoreResult {
         object NothingToDo : RestoreResult()
