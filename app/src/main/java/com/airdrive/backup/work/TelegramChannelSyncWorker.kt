@@ -12,6 +12,9 @@ import com.airdrive.backup.data.backup.TelegramChannelSync
 import com.airdrive.backup.data.backup.TelegramSyncStateStore
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.NotificationHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 
 /** Long-running Telegram inventory import. It survives leaving the screen and process recreation. */
 class TelegramChannelSyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
@@ -25,12 +28,15 @@ class TelegramChannelSyncWorker(appContext: Context, params: WorkerParameters) :
         stateStore.running(0, "Preparing Telegram inventory…")
         notify("Preparing Telegram inventory…", 0, true)
         return try {
+            val callbackScope = CoroutineScope(currentCoroutineContext())
             val result = sync.syncConfiguredChannels { text ->
                 val now = System.currentTimeMillis()
                 if (text != lastNotifyText || now - lastNotifyAt >= 1000L) {
                     lastNotifyText = text
                     lastNotifyAt = now
-                    notify(text, 0, true)
+                    callbackScope.launch {
+                        notify(text, 0, true)
+                    }
                 }
             }
             val output = Data.Builder()
