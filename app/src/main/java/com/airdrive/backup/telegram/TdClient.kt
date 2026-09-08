@@ -122,18 +122,30 @@ class TdClient private constructor(private val appContext: Context) {
         val result = ArrayList<TelegramChannelFile>()
         var fromMessageId = 0L
         var pages = 0
-        while (pages < 10000) {
-            val history = send(TdApi.GetChatHistory().apply { this.chatId = chatId; this.fromMessageId = fromMessageId; offset = 0; limit = 100; onlyLocal = false }) as TdApi.Messages
+        var retryAttempt = 0
+        while (true) {
+            val history = try {
+                send(TdApi.GetChatHistory().apply { this.chatId = chatId; this.fromMessageId = fromMessageId; offset = 0; limit = 100; onlyLocal = false }) as TdApi.Messages
+            } catch (e: TdLibException) {
+                val retryable = e.code == 429 || e.code == 500 || e.code == 408
+                if (!retryable || retryAttempt >= 12) throw e
+                val retrySeconds = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull()?.coerceIn(1L, 600L) ?: (2L shl retryAttempt.coerceAtMost(8))
+                retryAttempt++
+                delay(retrySeconds * 1000L)
+                continue
+            }
+            retryAttempt = 0
             if (history.messages.isEmpty()) break
             pages++
             history.messages.forEach { message ->
                 telegramFileFromMessage(message, chatId)?.let { result += it }
             }
             onPage(result.size)
-            val oldest = history.messages.minOf { it.id }
+            // TDLib may return fewer than 100 messages even when older history still exists.
+            // A short page is not the end; continue from the oldest message actually returned.
+            val oldest = history.messages.last().id
             if (oldest <= 1L || oldest == fromMessageId) break
             fromMessageId = oldest
-            if (history.messages.size < 100) break
         }
         return result
     }
