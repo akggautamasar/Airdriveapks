@@ -1,0 +1,42 @@
+name: Repair BackupRepository syntax
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repair malformed newline escapes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt')
+          text = path.read_text()
+          fixed = text.replace('\\\\\n', '\\\\n')
+          if fixed == text:
+              print('No malformed newline escape found; nothing to commit.')
+          else:
+              path.write_text(fixed)
+              print('Repaired malformed newline escape(s) in BackupRepository.kt')
+          PY
+
+      - name: Commit repair
+        run: |
+          if git diff --quiet -- app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt; then
+            echo 'No repair needed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt
+          git commit -m 'Fix BackupRepository malformed newline escape'
+          git push
