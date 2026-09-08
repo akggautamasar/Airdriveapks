@@ -46,8 +46,342 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
-// This file is intentionally kept functionally identical except for the restore picker size.
-// The UI used to receive only 200 records, which made the Restore screen look like the backup
-// contained only 200 files. A large bounded window keeps the existing repository/TDLib restore
-// path intact while allowing the complete current library to be selected in one operation.
+enum class BackupPhase { IDLE, SCANNING, UPLOADING, FINISHED }
 
+data class UploadProgress(
+    val phase: BackupPhase = BackupPhase.IDLE,
+    val totalFiles: Int = 0,
+    val doneFiles: Int = 0,
+    val failedFiles: Int = 0,
+    val currentFileId: Long? = null,
+    val currentFileName: String? = null,
+    val currentFileBytes: Long = 0,
+    val currentFileUploadedBytes: Long = 0,
+    val totalBytesQueued: Long = 0,
+    val bytesUploaded: Long = 0,
+    val bytesPerSecond: Long = 0,
+    val statusText: String? = null,
+    val isRunning: Boolean = false
+) {
+    val effectiveBytes: Long get() = bytesUploaded + currentFileUploadedBytes
+    val fraction: Float
+        get() = if (totalBytesQueued <= 0L) 0f
+        else (effectiveBytes.toDouble() / totalBytesQueued.toDouble()).toFloat().coerceIn(0f, 1f)
+    val percent: Int
+        get() = if (totalBytesQueued <= 0L) 0
+        else ((effectiveBytes * 100) / totalBytesQueued).toInt().coerceIn(0, 100)
+    val etaSeconds: Long
+        get() = if (bytesPerSecond <= 0L) 0L
+        else (totalBytesQueued - effectiveBytes).coerceAtLeast(0L) / bytesPerSecond
+}
+
+data class RestoreState(
+    val fileName: String,
+    val doneBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val finishedPath: String? = null,
+    val error: String? = null
+) {
+    val running: Boolean get() = finishedPath == null && error == null
+    val fraction: Float
+        get() = if (totalBytes <= 0L) 0f
+        else (doneBytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
+}
+
+data class MigrationState(
+    val running: Boolean = false,
+    val queued: Boolean = false,
+    val filesTotal: Int = 0,
+    val filesDone: Int = 0,
+    val filesFailed: Int = 0,
+    val bytesDone: Long = 0,
+    val currentFile: String? = null,
+    val currentCategory: BackupCategory? = null,
+    val cancelled: Boolean = false,
+    val finished: Boolean = false,
+    val error: String? = null
+) {
+    val fraction: Float
+        get() = if (filesTotal <= 0) 0f
+        else ((filesDone + filesFailed).toDouble() / filesTotal.toDouble()).toFloat().coerceIn(0f, 1f)
+    val idle: Boolean get() = !running && !finished && !cancelled && error == null
+}
+
+data class CleanupResult(
+    val freedFiles: Int = 0,
+    val freedBytes: Long = 0,
+    val queuedForRepair: Int = 0,
+    val failed: Int = 0,
+    val stoppedReason: String? = null
+) {
+    val nothingHappened: Boolean
+        get() = freedFiles == 0 && queuedForRepair == 0 && failed == 0 && stoppedReason == null
+}
+
+data class VerifyResult(
+    val checked: Int = 0,
+    val confirmed: Int = 0,
+    val problems: Int = 0,
+    val requeued: Int = 0,
+    val unreachable: Int = 0,
+    val stoppedReason: String? = null
+) {
+    val nothingToDo: Boolean
+        get() = checked == 0 && stoppedReason == null
+}
+
+class BackupRepository private constructor(private val context: Context) {
+    private val tag = "AirDrive.Repo"
+    private val dao = AppDatabase.get(context).fileRecordDao()
+    private val runDao = AppDatabase.get(context).backupRunDao()
+    private val versionDao = AppDatabase.get(context).fileVersionDao()
+    private val scanner = FileScanner(context)
+    private val settings = SettingsStore(context)
+    private val tdClient = TdClient.get(context)
+    private val manifestSync = ManifestSync.get(context)
+    private val _progress = MutableStateFlow(UploadProgress())
+    val progress: StateFlow<UploadProgress> = _progress
+    private val _lastScan = MutableStateFlow<ScanProgress?>(null)
+    val lastScan: StateFlow<ScanProgress?> = _lastScan
+    @Volatile private var currentRunId: Long? = null
+    private val _restoreState = MutableStateFlow<RestoreState?>(null)
+    val restoreState: StateFlow<RestoreState?> = _restoreState
+    private val _migration = MutableStateFlow(MigrationState())
+    val migration: StateFlow<MigrationState> = _migration
+    private val _paused = MutableStateFlow(false)
+    val paused: StateFlow<Boolean> = _paused
+    private val activeUploads = ConcurrentHashMap<Long, Deferred<Boolean>>()
+    private val queueMutex = Mutex()
+    @Volatile private var activeUploadPath: String? = null
+    @Volatile private var speedSampleAt = 0L
+    @Volatile private var speedSampleBytes = 0L
+
+    init {
+        tdClient.onUploadProgress = { path, uploaded, total -> onFileProgress(path, uploaded, total) }
+        tdClient.onDownloadProgress = { _, done, total ->
+            _restoreState.value?.let { current ->
+                if (current.running) _restoreState.value = current.copy(doneBytes = done, totalBytes = if (total > 0L) total else current.totalBytes)
+            }
+        }
+    }
+    private fun onFileProgress(path: String, uploaded: Long, total: Long) {
+        if (path != activeUploadPath) return
+        val snapshot = _progress.value
+        val capped = if (total > 0L) uploaded.coerceAtMost(total) else uploaded
+        var speed = snapshot.bytesPerSecond
+        val now = System.currentTimeMillis()
+        val elapsed = now - speedSampleAt
+        if (elapsed >= 1000L) {
+            val delta = capped - speedSampleBytes
+            if (delta >= 0L) {
+                val instant = delta * 1000L / elapsed
+                speed = if (speed <= 0L) instant else (speed * 2L + instant) / 3L
+            }
+            speedSampleAt = now
+            speedSampleBytes = capped
+        }
+        _progress.value = snapshot.copy(currentFileUploadedBytes = capped, bytesPerSecond = speed)
+    }
+    private fun resetSpeedSample() { speedSampleAt = System.currentTimeMillis(); speedSampleBytes = 0L }
+
+    suspend fun scan(): ScanProgress = withContext(Dispatchers.IO) {
+        _progress.value = _progress.value.copy(phase = BackupPhase.SCANNING, isRunning = true, statusText = "Scanning storage…")
+        val result = scanner.scanAll { p ->
+            _progress.value = _progress.value.copy(phase = BackupPhase.SCANNING, isRunning = true, statusText = "Scanned ${p.filesScanned} • ${p.filesUnchanged} already backed up • ${p.filesQueued} to upload", currentFileName = p.currentDir.takeLast(52).ifBlank { null })
+        }
+        _lastScan.value = result
+        currentRunId?.let { runId -> runCatching { runDao.setScanCounts(runId, result.filesScanned, result.filesNew, result.filesModified, result.filesMissing, result.filesRenamed) } }
+        _progress.value = _progress.value.copy(statusText = scanSummary(result))
+        result
+    }
+    private fun scanSummary(result: ScanProgress): String {
+        if (result.accessBlocked) return "Grant “All files access” to back up every folder"
+        if (result.filesScanned == 0) return if (result.wholeDevice) "No files found" else "Add a folder to back up"
+        if (result.filesQueued == 0) {
+            val extras = buildList { if (result.filesRenamed > 0) add("${result.filesRenamed} moved"); if (result.filesMissing > 0) add("${result.filesMissing} deleted locally") }
+            return "Everything is backed up — ${result.filesScanned} file(s) checked" + if (extras.isEmpty()) "" else " • ${extras.joinToString(" • ")}"
+        }
+        return buildList { add("${result.filesScanned} scanned"); if (result.filesUnchanged > 0) add("${result.filesUnchanged} already backed up"); add("${result.filesQueued} to upload"); if (result.filesModified > 0) add("${result.filesModified} changed"); if (result.filesRenamed > 0) add("${result.filesRenamed} moved"); if (result.filesDuplicate > 0) add("${result.filesDuplicate} duplicate"); if (result.filesMissing > 0) add("${result.filesMissing} deleted locally"); if (result.filesExcluded > 0) add("${result.filesExcluded} skipped by your rules") }.joinToString(" • ")
+    }
+
+    suspend fun beginRun(startedBy: RunTrigger, categoryFilter: BackupCategory? = null): Long = withContext(Dispatchers.IO) {
+        runCatching { runDao.closeStaleRuns(System.currentTimeMillis()) }
+        val id = runDao.insert(BackupRun(startedBy = startedBy, categoryFilter = categoryFilter?.name.orEmpty(), outcome = RunOutcome.RUNNING))
+        currentRunId = id; id
+    }
+    suspend fun finishRun(outcome: RunOutcome? = null, note: String? = null) = withContext(Dispatchers.IO) {
+        val runId = currentRunId ?: return@withContext
+        currentRunId = null
+        val p = _progress.value
+        val resolved = outcome ?: when { p.failedFiles > 0 && p.doneFiles > p.failedFiles -> RunOutcome.PARTIAL; p.failedFiles > 0 -> RunOutcome.FAILED; else -> RunOutcome.COMPLETED }
+        runCatching { runDao.setUploadCounts(runId, (p.doneFiles - p.failedFiles).coerceAtLeast(0), p.failedFiles, p.bytesUploaded); runDao.finish(runId, resolved, System.currentTimeMillis(), note); runDao.trimTo(KEEP_RUNS) }
+        runCatching { versionDao.deleteOrphans() }
+    }
+    suspend fun closeStaleRuns() = withContext(Dispatchers.IO) { runCatching { runDao.closeStaleRuns(System.currentTimeMillis(), currentRunId ?: -1L) }.getOrDefault(0) }
+    fun recentRunsFlow(limit: Int = 100) = runDao.recentRunsFlow(limit)
+    fun runFlow(runId: Long) = runDao.byIdFlow(runId)
+    fun runCountFlow() = runDao.runCountFlow()
+    fun filesForRunFlow(runId: Long, limit: Int = 500) = dao.filesForRunFlow(runId, limit)
+    fun runBreakdownFlow(runId: Long) = dao.runBreakdownFlow(runId)
+    suspend fun lastFinishedRun(): BackupRun? = withContext(Dispatchers.IO) { runDao.lastFinishedRun() }
+    suspend fun countForRun(runId: Long): Int = withContext(Dispatchers.IO) { dao.countForRun(runId) }
+
+    suspend fun runBackupQueue(categoryFilter: BackupCategory? = null, onEachDone: suspend (FileRecord, Boolean) -> Unit = { _, _ -> }) {
+        withContext(Dispatchers.IO) {
+            queueMutex.withLock {
+                dao.resetInFlight()
+                val dest = settings.destination.first()
+                if (dest.needsSetup) { _progress.value = UploadProgress(phase = BackupPhase.FINISHED, statusText = "Choose where backups should go first"); finishRun(RunOutcome.BLOCKED, "No backup destination configured"); return@withLock }
+                if (settings.autoRetryFailed.first()) dao.retryFailedUnder(MAX_AUTO_RETRIES)
+                val order = settings.uploadOrder.first(); val template = settings.captionTemplate.first()
+                val enabledCategories = if (categoryFilter == null) settings.enabledCategories.first() else null
+                val total = if (categoryFilter == null) dao.pendingCount() else dao.pendingCountForCategory(categoryFilter)
+                val totalBytes = if (categoryFilter == null) dao.pendingBytes() else dao.pendingBytesForCategory(categoryFilter)
+                _progress.value = UploadProgress(phase = BackupPhase.UPLOADING, totalFiles = total, totalBytesQueued = totalBytes, isRunning = true, statusText = if (total == 0) "Nothing to back up" else null)
+                var done = 0; var failed = 0; var bytesDone = 0L; val attempted = HashSet<Long>()
+                while (currentCoroutineContext().isActive) {
+                    while (_paused.value && currentCoroutineContext().isActive) delay(400)
+                    if (!currentCoroutineContext().isActive) break
+                    val batch = nextBatch(order, categoryFilter).filter { attempted.add(it.id) }.filter { enabledCategories == null || it.category in enabledCategories }
+                    if (batch.isEmpty()) break
+                    for (record in batch) {
+                        if (!currentCoroutineContext().isActive) break
+                        while (_paused.value && currentCoroutineContext().isActive) delay(400)
+                        if (!currentCoroutineContext().isActive) break
+                        val fresh = dao.findByUri(record.uri); if (fresh == null || fresh.status != UploadStatus.PENDING) continue
+                        val ok = coroutineScope { val deferred = async { uploadOne(record, dest, template) }; activeUploads[record.id] = deferred; try { deferred.await() } catch (_: CancellationException) { false } finally { activeUploads.remove(record.id) } }
+                        if (ok) bytesDone += record.sizeBytes else failed++
+                        done++
+                        _progress.value = _progress.value.copy(doneFiles = done, failedFiles = failed, bytesUploaded = bytesDone, currentFileUploadedBytes = 0)
+                        currentRunId?.let { runId -> runCatching { runDao.setUploadCounts(runId, done - failed, failed, bytesDone) } }
+                        onEachDone(record, ok)
+                        if (done % MANIFEST_SYNC_EVERY == 0) runCatching { manifestSync.sync() }
+                    }
+                }
+                runCatching { manifestSync.sync() }
+                _progress.value = _progress.value.copy(phase = BackupPhase.FINISHED, isRunning = false, currentFileName = null, currentFileUploadedBytes = 0, bytesPerSecond = 0, statusText = if (failed > 0) "$done done, $failed failed" else "Backup complete")
+            }
+        }
+    }
+    private suspend fun nextBatch(order: UploadOrder, categoryFilter: BackupCategory?): List<FileRecord> = if (categoryFilter == null) when (order) { UploadOrder.OLDEST_FIRST -> dao.nextPendingBatch(BATCH_SIZE); UploadOrder.NEWEST_FIRST -> dao.nextPendingNewest(BATCH_SIZE); UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallest(BATCH_SIZE) } else when (order) { UploadOrder.OLDEST_FIRST -> dao.nextPendingBatchForCategory(categoryFilter, BATCH_SIZE); UploadOrder.NEWEST_FIRST -> dao.nextPendingNewestForCategory(categoryFilter, BATCH_SIZE); UploadOrder.SMALLEST_FIRST -> dao.nextPendingSmallestForCategory(categoryFilter, BATCH_SIZE) }
+    private suspend fun resolveDestination(record: FileRecord, dest: DestinationConfig): Long = when (dest.mode) { DestinationMode.SAVED_MESSAGES -> tdClient.savedMessagesChatId(); DestinationMode.SINGLE_CHAT -> dest.singleChatId; DestinationMode.PER_CATEGORY -> dest.perCategory[record.category]?.takeIf { it != 0L } ?: record.destinationChannelId }
+    private suspend fun uploadOne(record: FileRecord, dest: DestinationConfig, template: String): Boolean {
+        _progress.value = _progress.value.copy(currentFileId = record.id, currentFileName = record.displayName, currentFileBytes = record.sizeBytes, currentFileUploadedBytes = 0, statusText = null)
+        dao.markStatus(record.id, UploadStatus.UPLOADING)
+        var source: UploadSource? = null
+        return try {
+            val chatId = resolveDestination(record, dest); source = resolveSource(record); activeUploadPath = source.path; resetSpeedSample()
+            val messageId = tdClient.uploadFile(localPath = source.path, chatId = chatId, caption = applyTemplate(template, record), sizeBytes = record.sizeBytes)
+            val uploadedAt = System.currentTimeMillis(); dao.markUploaded(record.id, messageId, chatId, uploadedAt, currentRunId); recordVersion(record, messageId, chatId, uploadedAt); true
+        } catch (e: CancellationException) { dao.markStatus(record.id, UploadStatus.PENDING); throw e }
+        catch (e: Exception) { dao.markFailed(record.id, e.message?.take(400) ?: e.javaClass.simpleName); false }
+        finally { activeUploadPath = null; source?.takeIf { it.temporary }?.let { runCatching { File(it.path).delete() } } }
+    }
+    private data class UploadSource(val path: String, val temporary: Boolean)
+    private fun resolveSource(record: FileRecord): UploadSource {
+        val uri = Uri.parse(record.uri)
+        if (uri.scheme.equals("file", ignoreCase = true)) { val path = uri.path ?: throw IllegalStateException("Malformed file URI: ${record.uri}"); val file = File(path); if (!file.isFile) throw IllegalStateException("File no longer exists: $path"); if (!file.canRead()) throw IllegalStateException("Cannot read $path — “All files access” may have been revoked"); return UploadSource(file.absolutePath, false) }
+        return UploadSource(stageToCache(record).absolutePath, true)
+    }
+    private fun stageToCache(record: FileRecord): File { val dir = File(context.cacheDir, "upload_staging").apply { mkdirs() }; val target = File(dir, "${record.id}_${sanitize(record.displayName)}"); context.contentResolver.openInputStream(Uri.parse(record.uri))?.use { input -> target.outputStream().use { output -> input.copyTo(output, bufferSize = 1 shl 20) } } ?: throw IllegalStateException("Cannot open ${record.uri}; file may have been deleted or permission revoked"); return target }
+    private fun sanitize(name: String) = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    private fun applyTemplate(template: String, record: FileRecord): String { val path = Uri.parse(record.uri).path.orEmpty(); val folder = path.substringBeforeLast('/', "").removePrefix(PRIMARY_STORAGE); val date = DateFormat.format("dd-MM-yyyy HH:mm", Date(record.modifiedAtMillis)).toString(); val filled = template.replace("{name}", record.displayName).replace("{date}", date).replace("{size}", formatSize(record.sizeBytes)).replace("{folder}", folder).replace("{path}", path).replace("{category}", record.category.name.lowercase().replace('_', ' ')).replace("{ext}", record.displayName.substringAfterLast('.', "")); return filled.lines().filter { line -> line.isEmpty() || line.any { it.isLetterOrDigit() } }.joinToString("\n").trim().take(1024) }
+    private fun formatSize(bytes: Long): String = when { bytes >= 1L shl 30 -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0); bytes >= 1L shl 20 -> String.format(Locale.US, "%.2f MB", bytes / 1024.0 / 1024.0); bytes >= 1024L -> String.format(Locale.US, "%.0f KB", bytes / 1024.0); else -> "$bytes B" }
+    suspend fun prepareTelegram(): Boolean { if (!tdClient.awaitReady()) return false; tdClient.ensureChatListLoaded(); return true }
+    suspend fun testAllChannels(): List<Pair<BackupCategory, ChannelCheck>> { if (!tdClient.awaitReady(20_000)) return BackupCategory.values().map { it to ChannelCheck.Failed("Not signed in to Telegram yet") }; tdClient.ensureChatListLoaded(); val channels = settings.allChannels.first().perCategory; return BackupCategory.values().map { category -> category to tdClient.checkChannel(channels[category] ?: 0L) } }
+    suspend fun testDestination(): ChannelCheck { if (!tdClient.awaitReady(20_000)) return ChannelCheck.Failed("Not signed in to Telegram yet"); val dest = settings.destination.first(); return when (dest.mode) { DestinationMode.SAVED_MESSAGES -> runCatching { tdClient.savedMessagesChatId() }.fold({ ChannelCheck.Ok("Saved Messages") }, { ChannelCheck.Failed(it.message ?: it.javaClass.simpleName) }); DestinationMode.SINGLE_CHAT -> { tdClient.ensureChatListLoaded(); tdClient.checkChannel(dest.singleChatId) }; DestinationMode.PER_CATEGORY -> { val results = testAllChannels(); val ok = results.count { it.second is ChannelCheck.Ok }; if (ok == results.size) ChannelCheck.Ok("All ${results.size} channels reachable") else { val firstProblem = results.firstOrNull { it.second is ChannelCheck.Failed }; ChannelCheck.Failed("$ok of ${results.size} channels reachable" + (firstProblem?.let { " — ${it.first.name}: ${(it.second as ChannelCheck.Failed).reason}" } ?: "")) } } } }
+    suspend fun resolveChatInput(raw: String): ResolvedChat { if (!tdClient.awaitReady(20_000)) throw IllegalStateException("Not signed in to Telegram yet"); tdClient.ensureChatListLoaded(); return tdClient.resolveChatInput(raw) }
+    suspend fun createChannel(title: String): ResolvedChat { if (!tdClient.awaitReady(20_000)) throw IllegalStateException("Not signed in to Telegram yet"); return tdClient.createChannel(title) }
+    suspend fun repointCategory(category: BackupCategory, channelId: Long) = dao.repointCategory(category, channelId)
+    suspend fun pendingSummary(): Pair<Int, Long> = dao.pendingCount() to dao.pendingBytes()
+    suspend fun retryAllFailed() = dao.retryAllFailed()
+    suspend fun retryOne(id: Long) = dao.retryOne(id)
+    fun setPaused(v: Boolean) { _paused.value = v }
+    suspend fun cancelUpload(id: Long) { activeUploads[id]?.cancel(); dao.markCancelled(id) }
+    suspend fun cancelAllPending(): Int = dao.cancelAllPending()
+    suspend fun requeueCancelled(id: Long) = dao.requeueCancelled(id)
+    fun cancelledFilesFlow(limit: Int = 500) = dao.cancelledFilesFlow()
+    suspend fun restoreManifestIfFreshInstall() = manifestSync.restoreIfAvailable(force = false)
+    suspend fun restoreManifestForced() = manifestSync.restoreIfAvailable(force = true)
+    suspend fun syncManifestNow(): Boolean = manifestSync.sync()
+    suspend fun restoreFile(record: FileRecord): File = restoreInto(record, restoreDir())
+    private suspend fun restoreInto(record: FileRecord, dir: File): File = withContext(Dispatchers.IO) {
+        val messageId = record.telegramMessageId ?: throw IllegalStateException("No Telegram message was recorded for this file")
+        val chatId = record.destinationChannelId.takeIf { it != 0L } ?: throw IllegalStateException("No Telegram chat was recorded for this file")
+        _restoreState.value = RestoreState(record.displayName, totalBytes = record.sizeBytes)
+        try { if (!tdClient.awaitReady(30_000)) throw IllegalStateException("Not signed in to Telegram"); val fetched = tdClient.downloadMessageFile(chatId, messageId); val target = uniqueFile(dir, record.displayName.ifBlank { fetched.fileName }); File(fetched.path).inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output, bufferSize = 1 shl 20) } }; _restoreState.value = RestoreState(record.displayName, target.length(), target.length(), target.absolutePath); target }
+        catch (e: CancellationException) { _restoreState.value = null; throw e }
+        catch (e: Exception) { _restoreState.value = RestoreState(record.displayName, error = e.message?.take(300) ?: e.javaClass.simpleName); throw e }
+    }
+    fun clearRestoreState() { _restoreState.value = null }
+    fun restorableFlow(query: String, categoryName: String = "", limit: Int = 5000) = dao.restorableFlow(query, categoryName, limit)
+    fun cloudOnlyFlow(query: String = "", limit: Int = 300) = dao.cloudOnlyFlow(query, limit)
+    fun missingCountFlow() = dao.missingCountFlow()
+    fun cloudOnlyBytesFlow() = dao.cloudOnlyBytesFlow()
+    suspend fun setKeepForever(id: Long, keep: Boolean) = withContext(Dispatchers.IO) { dao.setKeepForever(id, keep) }
+    suspend fun markRestoredLocally(record: FileRecord) = withContext(Dispatchers.IO) { runCatching { dao.markRestored(record.id, System.currentTimeMillis()); dao.setLocalState(record.id, LocalState.UNKNOWN, System.currentTimeMillis()) } }
+    suspend fun purgeRemoteCopy(record: FileRecord): Result<Unit> = withContext(Dispatchers.IO) { val messageId = record.telegramMessageId; val chatId = record.destinationChannelId.takeIf { it != 0L }; if (messageId == null || chatId == null) { runCatching { dao.deleteById(record.id) }; return@withContext Result.success(Unit) }; runCatching { if (!tdClient.awaitReady(30_000)) throw IllegalStateException("Not signed in to Telegram"); tdClient.deleteMessages(chatId, longArrayOf(messageId)); dao.deleteById(record.id); Unit } }
+    suspend fun runAutoPurgeSweep(): Int = withContext(Dispatchers.IO) { if (!settings.autoDeleteMissingEnabled.first()) return@withContext 0; val days = settings.autoDeleteMissingDays.first(); val cutoff = System.currentTimeMillis() - days * DAY_MILLIS; val candidates = runCatching { dao.autoPurgeCandidates(cutoff, AUTO_PURGE_LIMIT) }.getOrDefault(emptyList()); if (candidates.isEmpty() || !tdClient.awaitReady(30_000)) return@withContext 0; var removed = 0; for (record in candidates) { if (!currentCoroutineContext().isActive) break; val messageId = record.telegramMessageId ?: continue; val chatId = record.destinationChannelId.takeIf { it != 0L } ?: continue; when (tdClient.probeMessage(chatId, messageId)) { is RemoteFile.Unknown -> break; is RemoteFile.Missing -> { runCatching { dao.deleteById(record.id) }; removed++ }; is RemoteFile.Present -> if (runCatching { tdClient.deleteMessages(chatId, longArrayOf(messageId)); dao.deleteById(record.id) }.isSuccess) removed++ } }; removed }
+    fun restorableTotalsFlow() = dao.restorableTotalsFlow()
+    fun restoredCountFlow() = dao.restoredCountFlow()
+    suspend fun migrationQueueSize(categories: Set<BackupCategory>, skipRestored: Boolean): Int = withContext(Dispatchers.IO) { categories.sumOf { runCatching { dao.restoreQueueCount(it.name, skipRestored) }.getOrDefault(0) } }
+    fun markMigrationQueued() { _migration.value = MigrationState(running = true, queued = true) }
+    fun markMigrationCancelled() { val current = _migration.value; if (current.running) _migration.value = current.copy(running = false, queued = false, cancelled = true, currentFile = null) }
+    fun clearMigrationState() { if (!_migration.value.running) _migration.value = MigrationState() }
+    suspend fun clearRestoreMarks(category: BackupCategory?): Int = withContext(Dispatchers.IO) { runCatching { dao.clearRestoreMarks(category?.name ?: "") }.getOrDefault(0) }
+    suspend fun migrateNow(categories: Set<BackupCategory>, skipRestored: Boolean) {
+        val ordered = BackupCategory.values().filter { it in categories }; if (ordered.isEmpty()) { _migration.value = MigrationState(finished = true); return }; _migration.value = MigrationState(running = true)
+        try { if (!tdClient.awaitReady(60_000)) throw IllegalStateException("Not signed in to Telegram"); if (!skipRestored) ordered.forEach { runCatching { dao.clearRestoreMarks(it.name) } }; val total = ordered.sumOf { runCatching { dao.restoreQueueCount(it.name, true) }.getOrDefault(0) }; _migration.value = _migration.value.copy(filesTotal = total); if (total == 0) { _migration.value = _migration.value.copy(running = false, finished = true); return }
+            for (category in ordered) { if (!currentCoroutineContext().isActive) break; val dir = File(restoreDir(), categoryFolder(category)).apply { mkdirs() }; val seen = HashSet<Long>(); while (currentCoroutineContext().isActive) { val page = dao.restoreQueue(category.name, true, MIGRATION_PAGE); val fresh = page.filterNot { it.id in seen }; if (fresh.isEmpty()) break; fresh.forEach { seen.add(it.id) }; for (record in fresh) { if (!currentCoroutineContext().isActive) break; restoreOneForMigration(record, category, dir) } } }
+            val done = _migration.value; _migration.value = done.copy(running = false, finished = true, currentFile = null)
+        } catch (e: CancellationException) { _migration.value = _migration.value.copy(running = false, cancelled = true, currentFile = null); throw e }
+        catch (e: Exception) { _migration.value = _migration.value.copy(running = false, currentFile = null, error = e.message?.take(300) ?: e.javaClass.simpleName) }
+        finally { clearRestoreState() }
+    }
+    private suspend fun restoreOneForMigration(record: FileRecord, category: BackupCategory, dir: File) { _migration.value = _migration.value.copy(currentFile = record.displayName, currentCategory = category); val restored = try { restoreInto(record, dir) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }; if (restored == null) { _migration.value = _migration.value.copy(filesFailed = _migration.value.filesFailed + 1); return }; markRestoredLocally(record); _migration.value = _migration.value.copy(filesDone = _migration.value.filesDone + 1, bytesDone = _migration.value.bytesDone + restored.length()) }
+    private fun categoryFolder(category: BackupCategory): String = when (category) { BackupCategory.PHOTOS -> "Photos"; BackupCategory.VIDEOS -> "Videos"; BackupCategory.PDFS -> "PDFs"; BackupCategory.WORD_EXCEL -> "Documents"; BackupCategory.AUDIO -> "Audio"; BackupCategory.CALL_RECORDINGS -> "Call recordings"; BackupCategory.OTHER_FILES -> "Other files" }
+    fun cleanupTotalsFlow() = dao.cleanupTotalsFlow()
+    fun freedBytesFlow() = dao.freedBytesFlow()
+    fun cleanupCandidatesFlow(category: BackupCategory? = null, verifiedOnly: Boolean = false, limit: Int = CLEANUP_LIMIT) = dao.cleanupCandidatesFlow(category?.name ?: "", verifiedOnly, limit)
+    suspend fun freeLocalCopies(records: List<FileRecord>, onProgress: (Int, Int) -> Unit = { _, _ -> }): CleanupResult = withContext(Dispatchers.IO) { if (records.isEmpty()) return@withContext CleanupResult(); if (!tdClient.awaitReady(30_000)) return@withContext CleanupResult(stoppedReason = "Not signed in to Telegram, so nothing could be checked"); var freed = 0; var freedBytes = 0L; var repaired = 0; var failed = 0; var stopped: String? = null; records.forEachIndexed { index, record -> if (stopped != null) return@forEachIndexed; if (!currentCoroutineContext().isActive) { stopped = "Cleanup was cancelled"; return@forEachIndexed }; onProgress(index, records.size); val messageId = record.telegramMessageId; val chatId = record.destinationChannelId.takeIf { it != 0L }; if (messageId == null || chatId == null) { repaired += requeueOne(record.id); return@forEachIndexed }; when (val remote = tdClient.probeMessage(chatId, messageId)) { is RemoteFile.Unknown -> stopped = "AirDrive could not reach Telegram to check the rest, so it stopped"; is RemoteFile.Missing -> { runCatching { dao.setVerifyState(record.id, VerifyState.MISSING_REMOTE, System.currentTimeMillis()) }; repaired += requeueOne(record.id) }; is RemoteFile.Present -> { val mismatch = remote.sizeBytes > 0 && record.sizeBytes > 0 && remote.sizeBytes != record.sizeBytes; if (mismatch) { runCatching { dao.setVerifyState(record.id, VerifyState.SIZE_MISMATCH, System.currentTimeMillis()) }; repaired += requeueOne(record.id) } else { runCatching { dao.setVerifyState(record.id, VerifyState.VERIFIED, System.currentTimeMillis()) }; val bytes = deleteLocalCopy(record); if (bytes == null) failed++ else { freed++; freedBytes += bytes } } } } }; onProgress(records.size, records.size); CleanupResult(freed, freedBytes, repaired, failed, stopped) }
+    private suspend fun requeueOne(id: Long): Int = runCatching { dao.requeueForRepair(id) }.getOrDefault(0).coerceIn(0, 1)
+    private suspend fun deleteLocalCopy(record: FileRecord): Long? { val path = runCatching { Uri.parse(record.uri).path }.getOrNull(); if (path.isNullOrBlank()) return null; val file = File(path); val size = if (file.isFile) file.length() else 0L; val gone = !file.exists() || runCatching { file.delete() }.getOrDefault(false); if (!gone) return null; runCatching { dao.markFreed(record.id, System.currentTimeMillis()) }; runCatching { MediaScannerConnection.scanFile(context, arrayOf(path), null, null) }; return if (size > 0) size else record.sizeBytes }
+    fun verifyBreakdownFlow() = dao.verifyBreakdownFlow()
+    fun verifyProblemsFlow(limit: Int = VERIFY_PROBLEM_LIMIT) = dao.verifyProblemsFlow(limit)
+    fun verifyProblemCountFlow() = dao.verifyProblemCountFlow()
+    suspend fun verifyNow(onlyUnchecked: Boolean = false, budget: Int = VERIFY_BUDGET, onProgress: (Int, Int) -> Unit = { _, _ -> }): VerifyResult = withContext(Dispatchers.IO) { if (!tdClient.awaitReady(30_000)) return@withContext VerifyResult(stoppedReason = "Not signed in to Telegram, so nothing could be checked"); val queue = runCatching { dao.verifyQueue(onlyUnchecked, budget) }.getOrDefault(emptyList()); if (queue.isEmpty()) return@withContext VerifyResult(); var checked = 0; var confirmed = 0; var problems = 0; var requeued = 0; var unreachable = 0; var consecutiveUnreachable = 0; var stopped: String? = null; queue.forEachIndexed { index, record -> if (stopped != null) return@forEachIndexed; if (!currentCoroutineContext().isActive) { stopped = "The check was cancelled"; return@forEachIndexed }; onProgress(index, queue.size); val messageId = record.telegramMessageId; val chatId = record.destinationChannelId.takeIf { it != 0L }; if (messageId == null || chatId == null) { problems++; checked++; runCatching { dao.setVerifyState(record.id, VerifyState.MISSING_REMOTE, System.currentTimeMillis()) }; requeued += requeueOne(record.id); return@forEachIndexed }; when (tdClient.probeMessage(chatId, messageId)) { is RemoteFile.Unknown -> { unreachable++; consecutiveUnreachable++; if (consecutiveUnreachable >= VERIFY_UNREACHABLE_RUN) stopped = "Telegram stopped answering, so the rest was left unchecked" }; is RemoteFile.Missing -> { consecutiveUnreachable = 0; checked++; problems++; runCatching { dao.setVerifyState(record.id, VerifyState.MISSING_REMOTE, System.currentTimeMillis()) }; requeued += requeueOne(record.id) }; is RemoteFile.Present -> { consecutiveUnreachable = 0; checked++; val mismatch = remote.sizeBytes > 0 && record.sizeBytes > 0 && remote.sizeBytes != record.sizeBytes; if (mismatch) { problems++; runCatching { dao.setVerifyState(record.id, VerifyState.SIZE_MISMATCH, System.currentTimeMillis()) }; requeued += requeueOne(record.id) } else { confirmed++; runCatching { dao.setVerifyState(record.id, VerifyState.VERIFIED, System.currentTimeMillis()) } } } } }; onProgress(queue.size, queue.size); VerifyResult(checked, confirmed, problems, requeued, unreachable, stopped) }
+    suspend fun repairFile(record: FileRecord): Boolean = withContext(Dispatchers.IO) { requeueOne(record.id) == 1 }
+    suspend fun forgetRecord(record: FileRecord) = withContext(Dispatchers.IO) { runCatching { dao.deleteById(record.id) }; runCatching { versionDao.deleteForRecord(record.id) }; Unit }
+    private suspend fun recordVersion(record: FileRecord, messageId: Long, chatId: Long, uploadedAt: Long) { runCatching { versionDao.insert(FileVersion(recordId = record.id, revision = record.revision, displayName = record.displayName, sizeBytes = record.sizeBytes, modifiedAtMillis = record.modifiedAtMillis, fingerprint = record.fingerprint, chatId = chatId, telegramMessageId = messageId, uploadedAtMillis = uploadedAt, runId = currentRunId)) } }
+    fun versionsFlow(recordId: Long) = versionDao.versionsFlow(recordId)
+    fun versionedFilesFlow(limit: Int = HISTORY_LIMIT) = versionDao.versionedFilesFlow(limit)
+    fun versionedFileCountFlow() = versionDao.versionedFileCountFlow()
+    fun versionCountFlow(recordId: Long) = versionDao.versionCountFlow(recordId)
+    fun versionCountsFlow() = versionDao.versionCountsFlow()
+    suspend fun pruneOrphanVersions(): Int = withContext(Dispatchers.IO) { runCatching { versionDao.deleteOrphans() }.getOrDefault(0) }
+    suspend fun restoreVersion(record: FileRecord, version: FileVersion): File { if (version.telegramMessageId == null) throw IllegalStateException("No Telegram message was recorded for this version"); if (version.chatId == 0L) throw IllegalStateException("No Telegram chat was recorded for this version"); return restoreInto(record.copy(displayName = versionedFileName(version.displayName, version.revision), sizeBytes = version.sizeBytes, destinationChannelId = version.chatId, telegramMessageId = version.telegramMessageId), restoreDir()) }
+    private fun versionedFileName(name: String, revision: Int): String { val safe = name.ifBlank { "file" }; val dot = safe.lastIndexOf('.'); return if (dot > 0) "${safe.substring(0, dot)} (v$revision)${safe.substring(dot)}" else "$safe (v$revision)" }
+    suspend fun exportManifest(): File = withContext(Dispatchers.IO) { val target = uniqueFile(restoreDir(), "airdrive-manifest.csv"); target.bufferedWriter().use { out -> out.appendLine("name,category,size_bytes,uploaded_at,chat_id,message_id,source_path"); var offset = 0; while (true) { val page = dao.uploadedPage(EXPORT_PAGE, offset); if (page.isEmpty()) break; for (r in page) out.appendLine(listOf(r.displayName, r.category.name, r.sizeBytes.toString(), r.uploadedAtMillis?.let { DateFormat.format("yyyy-MM-dd HH:mm", Date(it)).toString() } ?: "", r.destinationChannelId.toString(), r.telegramMessageId?.toString() ?: "", Uri.parse(r.uri).path.orEmpty()).joinToString(",") { csvCell(it) }); offset += page.size } }; target }
+    suspend fun exportSettings(): File = withContext(Dispatchers.IO) { val target = uniqueFile(restoreDir(), "airdrive-settings.txt"); target.writeText(settings.exportSummary()); target }
+    private fun csvCell(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' }) "\"" + value.replace("\"", "\"\"").replace("\n", " ") + "\"" else value
+    @Suppress("DEPRECATION") private fun restoreDir(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AirDrive").apply { mkdirs() }
+    private fun uniqueFile(dir: File, name: String): File { val safe = name.replace(Regex("[/\\\\:*?\"<>|]"), "_").ifBlank { "restored" }; val base = safe.substringBeforeLast('.', safe); val ext = safe.substringAfterLast('.', ""); var candidate = File(dir, safe); var n = 1; while (candidate.exists() && n < 1000) { val suffix = if (ext.isEmpty()) "" else ".$ext"; candidate = File(dir, "$base ($n)$suffix"); n++ }; return candidate }
+    companion object {
+        private const val BATCH_SIZE = 50
+        private const val EXPORT_PAGE = 500
+        private const val MAX_AUTO_RETRIES = 5
+        private const val MANIFEST_SYNC_EVERY = 100
+        private const val KEEP_RUNS = 500
+        private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+        private const val AUTO_PURGE_LIMIT = 200
+        private const val MIGRATION_PAGE = 100
+        private const val CLEANUP_LIMIT = 300
+        private const val VERIFY_BUDGET = 200
+        private const val VERIFY_PROBLEM_LIMIT = 200
+        private const val VERIFY_UNREACHABLE_RUN = 5
+        private const val HISTORY_LIMIT = 300
+        private const val PRIMARY_STORAGE = "/storage/emulated/0"
+        @Volatile private var instance: BackupRepository? = null
+        fun get(context: Context): BackupRepository = instance ?: synchronized(this) { instance ?: BackupRepository(context.applicationContext).also { instance = it } }
+    }
+}
