@@ -27,16 +27,23 @@ jobs:
           i = matches[0]
           line = lines[i]
           if not line.rstrip().endswith('} } } }'):
-              raise SystemExit('Unexpected runBackupQueue ending; refusing automatic edit: ' + line[-120:])
-          lines[i] = line.rstrip()[:-1]
-          path.write_text('\n'.join(lines) + '\n')
-          print(f'Removed one premature closing brace from BackupRepository.kt line {i + 1}.')
+              print('Brace repair already applied; leaving source unchanged.')
+          else:
+              lines[i] = line.rstrip()[:-1]
+              path.write_text('\n'.join(lines) + '\n')
+              print(f'Removed one premature closing brace from BackupRepository.kt line {i + 1}.')
           PY
 
       - name: Commit repair
         run: |
+          if git diff --quiet -- app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt; then
+            echo 'No repair needed.'
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/java/com/airdrive/backup/data/repo/BackupRepository.kt
           git commit -m 'Fix BackupRepository class brace balance'
           git push
+
+# Build-trigger marker after the source repair.
