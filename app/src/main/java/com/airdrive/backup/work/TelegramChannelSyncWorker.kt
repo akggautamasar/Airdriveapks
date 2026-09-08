@@ -30,10 +30,6 @@ class TelegramChannelSyncWorker(appContext: Context, params: WorkerParameters) :
                 if (text != lastNotifyText || now - lastNotifyAt >= 1000L) {
                     lastNotifyText = text
                     lastNotifyAt = now
-                    val scanned = Regex("scanned (\\d+) files").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        ?: Regex("(\\d+) files found").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
-                        ?: 0
-                    setProgress(Data.Builder().putInt("files_found", scanned).putString("status", text).build())
                     notify(text, 0, true)
                 }
             }
@@ -44,23 +40,25 @@ class TelegramChannelSyncWorker(appContext: Context, params: WorkerParameters) :
                 .putInt("already_indexed", result.alreadyIndexed)
                 .putInt("failed_channels", result.failedChannels)
                 .putInt("manifest_entries", result.manifestEntries)
+                .putBoolean("manifest_synced", result.manifestSynced)
                 .build()
             setProgress(output)
             stateStore.complete(
                 result.channels, result.messagesScanned, result.filesImported,
                 result.alreadyIndexed, result.failedChannels, result.manifestEntries,
-                "Telegram inventory complete"
+                if (result.manifestSynced) "Telegram inventory complete" else "Inventory complete; manifest update failed"
             )
             NotificationHelper.notifyResult(
                 applicationContext,
-                if (result.failedChannels == 0) "Telegram inventory complete" else "Telegram inventory partially complete",
+                if (result.failedChannels == 0 && result.manifestSynced) "Telegram inventory complete" else "Telegram inventory needs attention",
                 "${result.filesImported} added • ${result.alreadyIndexed} already indexed • ${result.messagesScanned} files found",
                 listOf(
-                    "${result.channels} channel(s) scanned • ${result.manifestEntries} files in manifest",
-                    if (result.failedChannels > 0) "${result.failedChannels} channel(s) could not be scanned; start import again to retry." else "All connected channels completed."
+                    "${result.channels} channel(s) scanned • ${result.manifestEntries} files currently in manifest",
+                    if (result.failedChannels > 0) "${result.failedChannels} channel(s) could not be scanned; start import again to retry." else "All connected channels were scanned.",
+                    if (result.manifestSynced) "Manifest JSON updated successfully." else "Manifest JSON could not be updated; the Room inventory is preserved."
                 ),
                 Routes.CATEGORIES_STATS,
-                result.failedChannels > 0
+                result.failedChannels > 0 || !result.manifestSynced
             )
             Result.success(output)
         } catch (e: Exception) {
