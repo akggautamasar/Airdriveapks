@@ -12,7 +12,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -54,12 +53,19 @@ private val filters = listOf(FileFilter("All", null, Icons.Default.GridView), Fi
     var filtersOpen by rememberSaveable { mutableStateOf(false) }
     val category = remember(categoryName) { BackupCategory.values().find { it.name == categoryName } }
     val listState = rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() }
+    var firstStatePass by remember { mutableStateOf(true) }
     val categoryKey = category?.name ?: ""
     val files by remember(query, categoryKey, status, sort) { dao.searchFlow(query.trim(), categoryKey, status, "", "", 0L, 0L, 0L, 0L, 0L, sort, FILE_LIMIT) }.collectAsState(initial = emptyList())
     val total by remember(query, categoryKey, status) { dao.searchCountFlow(query.trim(), categoryKey, status, "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
     val uploaded by remember(query, categoryKey) { dao.searchCountFlow(query.trim(), categoryKey, "UPLOADED", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
     val pending by remember(query, categoryKey) { dao.searchCountFlow(query.trim(), categoryKey, "PENDING", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
-    LaunchedEffect(categoryKey, query, status, sort) { listState.scrollToItem(0) }
+    LaunchedEffect(categoryKey, query, status, sort) {
+        if (firstStatePass) {
+            firstStatePass = false
+        } else {
+            listState.scrollToItem(0)
+        }
+    }
     if (filtersOpen) FilesFilterSheet(category, status, sort, { categoryName = it?.name.orEmpty() }, { status = it }, { sort = it }, { categoryName = ""; status = ""; sort = "newest" }, { filtersOpen = false })
     Scaffold(containerColor = Page) { pad -> Column(Modifier.fillMaxSize().padding(pad)) {
         val title = if (category == null) "Files" else categoryLabel(category)
