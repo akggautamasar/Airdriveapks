@@ -89,7 +89,46 @@ class TdClient private constructor(private val appContext: Context) {
     private fun registerSend(tempId: Long): CompletableDeferred<SendOutcome> { val waiter = CompletableDeferred<SendOutcome>(); synchronized(sendLock) { val already = earlyOutcomes.remove(tempId); if (already != null) waiter.complete(already) else pendingSends[tempId] = waiter }; return waiter }
     private fun completeSend(tempId: Long, outcome: SendOutcome) { synchronized(sendLock) { val waiter = pendingSends.remove(tempId); if (waiter != null) waiter.complete(outcome) else { if (earlyOutcomes.size > 256) earlyOutcomes.clear(); earlyOutcomes[tempId] = outcome } } }
     private fun forgetSend(tempId: Long) { synchronized(sendLock) { pendingSends.remove(tempId); earlyOutcomes.remove(tempId) } }
-    suspend fun downloadFileRange(chatId: Long, messageId: Long, offset: Long, limit: Int): ByteArray { requireChat(chatId); require(offset >= 0L); require(limit > 0); val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message; val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file"); val file = send(TdApi.DownloadFile().apply { fileId = payload.first.id; priority = 32; this.offset = offset; this.limit = limit.toLong(); synchronous = true }) as TdApi.File; val path = file.local?.path ?: throw TdLibException(500, "Telegram did not return a readable file range"); val expected = minOf(limit.toLong(), (file.size.toLong() - offset).coerceAtLeast(0L)); val readLength = minOf(limit.toLong(), if (file.local?.downloadedSize ?: 0 > 0) file.local.downloadedSize.toLong() else expected).toInt(); if (readLength <= 0) return ByteArray(0); return RandomAccessFile(File(path), "r").use { raf -> if (offset >= raf.length()) return@use ByteArray(0); raf.seek(offset.coerceAtMost(raf.length())); val out = ByteArray(minOf(readLength.toLong(), raf.length() - raf.filePointer).toInt()); var done = 0; while (done < out.size) { val n = raf.read(out, done, out.size - done); if (n <= 0) break; done += n }; if (done == out.size) out else out.copyOf(done) } }
+
+    suspend fun downloadFileRange(chatId: Long, messageId: Long, offset: Long, limit: Int): ByteArray {
+        requireChat(chatId)
+        require(offset >= 0L)
+        require(limit > 0)
+        val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message
+        val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file")
+        val file = send(TdApi.DownloadFile().apply {
+            fileId = payload.first.id
+            priority = 32
+            this.offset = offset
+            this.limit = limit.toLong()
+            synchronous = true
+        }) as TdApi.File
+        val local = file.local ?: throw TdLibException(500, "Telegram did not return a readable file range")
+        val path = local.path.takeIf { it.isNotBlank() } ?: throw TdLibException(500, "Telegram did not return a local file path")
+        val downloadOffset = local.downloadOffset.toLong().coerceAtLeast(0L)
+        val downloadedPrefixSize = local.downloadedPrefixSize.toLong().coerceAtLeast(0L)
+        if (downloadedPrefixSize <= 0L) return ByteArray(0)
+        if (offset < downloadOffset || offset >= downloadOffset + downloadedPrefixSize) {
+            throw TdLibException(500, "Telegram returned a range outside the requested offset")
+        }
+        val relativeOffset = offset - downloadOffset
+        val available = downloadedPrefixSize - relativeOffset
+        val toRead = minOf(limit.toLong(), available).toInt()
+        if (toRead <= 0) return ByteArray(0)
+        return RandomAccessFile(File(path), "r").use { raf ->
+            if (downloadOffset >= raf.length()) return@use ByteArray(0)
+            raf.seek((downloadOffset + relativeOffset).coerceAtMost(raf.length()))
+            val out = ByteArray(minOf(toRead.toLong(), raf.length() - raf.filePointer).toInt())
+            var done = 0
+            while (done < out.size) {
+                val n = raf.read(out, done, out.size - done)
+                if (n <= 0) break
+                done += n
+            }
+            if (done == out.size) out else out.copyOf(done)
+        }
+    }
+
     suspend fun downloadMessageFile(chatId: Long, messageId: Long): DownloadedFile { requireChat(chatId); val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message; val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file"); val done = send(TdApi.DownloadFile().apply { fileId = payload.first.id; priority = 16; offset = 0; limit = 0; synchronous = true }) as TdApi.File; val path = done.local?.path ?: throw TdLibException(500, "Telegram did not return the file"); val size = (if (done.size > 0) done.size else done.expectedSize).toLong(); return DownloadedFile(path, payload.second, size) }
     suspend fun editMessageDocument(chatId: Long, messageId: Long, localPath: String, caption: String) { val inputDocument = TdApi.InputDocument().apply { document = TdApi.InputFileLocal(localPath); thumbnail = null; disableContentTypeDetection = true }; val content = TdApi.InputMessageDocument().apply { document = inputDocument; this.caption = TdApi.FormattedText(caption, emptyArray()) }; send(TdApi.EditMessageMedia().apply { this.chatId = chatId; this.messageId = messageId; inputMessageContent = content }) }
     suspend fun pinMessage(chatId: Long, messageId: Long) { send(TdApi.PinChatMessage().apply { this.chatId = chatId; this.messageId = messageId; disableNotification = true; onlyForSelf = false }) }
