@@ -12,12 +12,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,21 +46,29 @@ private val filters = listOf(FileFilter("All", null, Icons.Default.GridView), Fi
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun FilesHubScreen(nav: NavHostController, initialCategory: BackupCategory? = null) {
     val context = LocalContext.current; val dao = remember { AppDatabase.get(context).fileRecordDao() }
-    var category by remember(initialCategory) { mutableStateOf(initialCategory) }; var query by remember { mutableStateOf("") }; var status by remember { mutableStateOf("") }; var sort by remember { mutableStateOf("newest") }; var search by remember { mutableStateOf(false) }; var filtersOpen by remember { mutableStateOf(false) }
-    val categoryName = category?.name ?: ""
-    val files by remember(query, categoryName, status, sort) { dao.searchFlow(query.trim(), categoryName, status, "", "", 0L, 0L, 0L, 0L, 0L, sort, FILE_LIMIT) }.collectAsState(initial = emptyList())
-    val total by remember(query, categoryName, status) { dao.searchCountFlow(query.trim(), categoryName, status, "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
-    val uploaded by remember(query, categoryName) { dao.searchCountFlow(query.trim(), categoryName, "UPLOADED", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
-    val pending by remember(query, categoryName) { dao.searchCountFlow(query.trim(), categoryName, "PENDING", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
-    if (filtersOpen) FilesFilterSheet(category, status, sort, { category = it }, { status = it }, { sort = it }, { category = null; status = ""; sort = "newest" }, { filtersOpen = false })
+    var categoryName by rememberSaveable(initialCategory?.name) { mutableStateOf(initialCategory?.name.orEmpty()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var status by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf("newest") }
+    var search by rememberSaveable { mutableStateOf(false) }
+    var filtersOpen by rememberSaveable { mutableStateOf(false) }
+    val category = remember(categoryName) { BackupCategory.values().find { it.name == categoryName } }
+    val listState = rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() }
+    val categoryKey = category?.name ?: ""
+    val files by remember(query, categoryKey, status, sort) { dao.searchFlow(query.trim(), categoryKey, status, "", "", 0L, 0L, 0L, 0L, 0L, sort, FILE_LIMIT) }.collectAsState(initial = emptyList())
+    val total by remember(query, categoryKey, status) { dao.searchCountFlow(query.trim(), categoryKey, status, "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
+    val uploaded by remember(query, categoryKey) { dao.searchCountFlow(query.trim(), categoryKey, "UPLOADED", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
+    val pending by remember(query, categoryKey) { dao.searchCountFlow(query.trim(), categoryKey, "PENDING", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
+    LaunchedEffect(categoryKey, query, status, sort) { listState.scrollToItem(0) }
+    if (filtersOpen) FilesFilterSheet(category, status, sort, { categoryName = it?.name.orEmpty() }, { status = it }, { sort = it }, { categoryName = ""; status = ""; sort = "newest" }, { filtersOpen = false })
     Scaffold(containerColor = Page) { pad -> Column(Modifier.fillMaxSize().padding(pad)) {
-        val title = if (category == null) "Files" else categoryLabel(category!!)
+        val title = if (category == null) "Files" else categoryLabel(category)
         TopAppBar(title = { Column { Text(title, fontWeight = FontWeight.Bold); Text(if (category == null) "All files in AirDrive" else "${Format.count(total)} files", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }, navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }, actions = { IconButton(onClick = { search = !search }) { Icon(Icons.Default.Search, "Search") }; IconButton(onClick = { filtersOpen = true }) { Icon(Icons.Default.FilterList, "Filters & Sort") } })
         if (search) OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp), singleLine = true, leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search files, folders, extensions…") }, shape = RoundedCornerShape(17.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) { filters.forEach { f -> CategoryShortcut(f, category == f.category) { if (f.category == BackupCategory.PHOTOS || f.category == BackupCategory.VIDEOS) nav.navigate("${Routes.GALLERY}/${if (f.category == BackupCategory.PHOTOS) "photos" else "videos"}") else category = f.category } } }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) { filters.forEach { f -> CategoryShortcut(f, category == f.category) { if (f.category == BackupCategory.PHOTOS || f.category == BackupCategory.VIDEOS) nav.navigate("${Routes.GALLERY}/${if (f.category == BackupCategory.PHOTOS) "photos" else "videos"}") else categoryName = f.category?.name.orEmpty() } } }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) { StatusCard("Uploaded", uploaded, Green, GreenSoft, status == "UPLOADED") { status = if (status == "UPLOADED") "" else "UPLOADED" }; StatusCard("Pending", pending, Orange, OrangeSoft, status == "PENDING") { status = if (status == "PENDING") "" else "PENDING" } }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("All files", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); Text("${Format.count(total)} files", style = MaterialTheme.typography.labelSmall, color = Purple) }; SortPill(sort) { sort = it }; IconButton(onClick = { filtersOpen = true }) { Icon(Icons.Default.FilterList, null, tint = Purple) } }
-        if (files.isEmpty()) EmptyFiles() else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) { items(files, key = { it.id }) { FileRow(it, nav) } }
+        if (files.isEmpty()) EmptyFiles() else LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) { items(files, key = { it.id }) { FileRow(it, nav) } }
     } }
 }
 
