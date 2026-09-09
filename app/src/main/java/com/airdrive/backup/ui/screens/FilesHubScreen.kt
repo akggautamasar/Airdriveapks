@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,15 +13,27 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.*
@@ -48,17 +61,23 @@ import java.io.File
 import java.util.Locale
 
 private const val FILE_LIMIT = 1_000_000
-private data class FileFilter(val label: String, val category: BackupCategory?)
+private val Purple = Color(0xFF6D4AFF)
+private val PurpleSoft = Color(0xFFF0EBFF)
+private val Green = Color(0xFF18A86B)
+private val GreenSoft = Color(0xFFE8F8F0)
+private val Orange = Color(0xFFF2A20B)
+private val OrangeSoft = Color(0xFFFFF5DF)
+private val Page = Color(0xFFF8F9FD)
 
+private data class FileFilter(val label: String, val category: BackupCategory?, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 private val fileFilters = listOf(
-    FileFilter("All", null),
-    FileFilter("Photos", BackupCategory.PHOTOS),
-    FileFilter("Videos", BackupCategory.VIDEOS),
-    FileFilter("PDFs", BackupCategory.PDFS),
-    FileFilter("Documents", BackupCategory.WORD_EXCEL),
-    FileFilter("Audio", BackupCategory.AUDIO),
-    FileFilter("Calls", BackupCategory.CALL_RECORDINGS),
-    FileFilter("Other", BackupCategory.OTHER_FILES)
+    FileFilter("All", null, Icons.Default.GridView),
+    FileFilter("Photos", BackupCategory.PHOTOS, Icons.Default.ImageIcon),
+    FileFilter("Videos", BackupCategory.VIDEOS, Icons.Default.VideoFile),
+    FileFilter("PDFs", BackupCategory.PDFS, Icons.Default.Description),
+    FileFilter("Docs", BackupCategory.WORD_EXCEL, Icons.Default.Description),
+    FileFilter("Audio", BackupCategory.AUDIO, Icons.Default.AudioFile),
+    FileFilter("Other", BackupCategory.OTHER_FILES, Icons.Default.Info)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,209 +91,162 @@ fun FilesHubScreen(nav: NavHostController, initialCategory: BackupCategory? = nu
     var localState by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf("newest") }
     var showFilters by remember { mutableStateOf(false) }
-    val categoryName = selectedCategory?.name ?: ""
+    var showSearch by remember { mutableStateOf(false) }
 
+    val categoryName = selectedCategory?.name ?: ""
     val files by remember(query, categoryName, status, localState, sort) {
         dao.searchFlow(query.trim(), categoryName, status, localState, "", 0L, 0L, 0L, 0L, 0L, sort, FILE_LIMIT)
     }.collectAsState(initial = emptyList())
-
     val total by remember(query, categoryName, status, localState) {
         dao.searchCountFlow(query.trim(), categoryName, status, localState, "", 0L, 0L, 0L, 0L, 0L)
     }.collectAsState(initial = 0)
-
     val uploadedCount by remember(query, categoryName, localState) {
         dao.searchCountFlow(query.trim(), categoryName, "UPLOADED", localState, "", 0L, 0L, 0L, 0L, 0L)
     }.collectAsState(initial = 0)
-
     val pendingCount by remember(query, categoryName, localState) {
         dao.searchCountFlow(query.trim(), categoryName, "PENDING", localState, "", 0L, 0L, 0L, 0L, 0L)
     }.collectAsState(initial = 0)
+
+    if (showFilters) FileFiltersSheet(
+        selectedCategory, status, sort,
+        onCategory = { selectedCategory = it }, onStatus = { status = it }, onSort = { sort = it },
+        onReset = { selectedCategory = null; status = ""; sort = "newest"; localState = "" },
+        onDismiss = { showFilters = false }
+    )
 
     val uploaded = remember(files) { files.filter { it.status == UploadStatus.UPLOADED } }
     val pending = remember(files) { files.filter { it.status == UploadStatus.PENDING } }
     val other = remember(files) { files.filter { it.status != UploadStatus.UPLOADED && it.status != UploadStatus.PENDING } }
 
-    Scaffold(
-        containerColor = Color(0xFFF7F9FD),
-        topBar = {
-            TopAppBar(
-                title = { Column { Text("Files", fontWeight = FontWeight.Bold); Text(if (selectedCategory == null) "All files in AirDrive" else categoryLabel(selectedCategory!!), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
-                actions = { IconButton(onClick = { showFilters = !showFilters }) { Icon(Icons.Default.FilterList, "Filters") } }
-            )
-        }
-    ) { padding ->
+    Scaffold(containerColor = Page) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                singleLine = true,
+            TopAppBar(
+                title = { Column {
+                    Text(if (selectedCategory == BackupCategory.PHOTOS) "Photos" else if (selectedCategory == BackupCategory.VIDEOS) "Videos" else "Files", fontWeight = FontWeight.Bold)
+                    Text(if (selectedCategory == null) "All files in AirDrive" else categoryLabel(selectedCategory), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
+                actions = {
+                    IconButton(onClick = { showSearch = !showSearch }) { Icon(Icons.Default.Search, "Search") }
+                    IconButton(onClick = { showFilters = true }) { Icon(Icons.Default.FilterList, "Filters & Sort") }
+                }
+            )
+            if (showSearch) OutlinedTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, "Clear") } },
-                placeholder = { Text("Search files, folders, extensions…") },
-                supportingText = { Text("Searches names and stored paths • try .pdf, invoice, vacation") },
-                shape = RoundedCornerShape(17.dp)
+                placeholder = { Text("Search files, folders, extensions…") }, shape = RoundedCornerShape(17.dp)
             )
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 fileFilters.forEach { filter ->
-                    FilterChip(selected = selectedCategory == filter.category, onClick = { selectedCategory = filter.category }, label = { Text(filter.label) }, shape = RoundedCornerShape(13.dp))
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-            StatusPills(status, uploadedCount, pendingCount) { status = it }
-            if (showFilters) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text("Device availability", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("" to "Any", "PRESENT" to "On device", "MISSING" to "Cloud only", "FREED" to "Freed").forEach { (value, label) ->
-                            FilterChip(selected = localState == value, onClick = { localState = value }, label = { Text(label) })
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    Text("Sort", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("newest" to "Newest", "oldest" to "Oldest", "largest" to "Largest", "smallest" to "Smallest", "name" to "A–Z").forEach { (value, label) ->
-                            FilterChip(selected = sort == value, onClick = { sort = value }, label = { Text(label) })
-                        }
+                    CategoryShortcut(filter, selectedCategory == filter.category) {
+                        if (filter.category == BackupCategory.PHOTOS || filter.category == BackupCategory.VIDEOS) {
+                            nav.navigate("${Routes.GALLERY}/${if (filter.category == BackupCategory.PHOTOS) "photos" else "videos"}")
+                        } else selectedCategory = filter.category
                     }
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${Format.count(total)} files", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                Text(if (status == "UPLOADED") "Backed up" else if (status == "PENDING") "Waiting to upload" else "All categories", style = MaterialTheme.typography.labelSmall, color = Color(0xFF7C3AED))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                StatusCard("Uploaded", Format.count(uploadedCount), Green, GreenSoft, status == "UPLOADED") { status = if (status == "UPLOADED") "" else "UPLOADED" }
+                StatusCard("Pending", Format.count(pendingCount), Orange, OrangeSoft, status == "PENDING") { status = if (status == "PENDING") "" else "PENDING" }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) { Text("All files", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); Text("${Format.count(total)} files", style = MaterialTheme.typography.labelSmall, color = Purple) }
+                SortPill(sort) { sort = it }
+                IconButton(onClick = { showFilters = true }) { Icon(Icons.Default.FilterList, null, tint = Purple) }
             }
             if (files.isEmpty()) EmptyFiles(query)
-            else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                if (status.isEmpty() && uploaded.isNotEmpty()) {
-                    item { SectionHeader("Uploaded", uploadedCount, "Backed up to Telegram", Color(0xFF20A463)) }
-                    items(uploaded, key = { it.id }) { record -> FileHubRow(record) { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") } }
-                }
-                if (status.isEmpty() && pending.isNotEmpty()) {
-                    item { SectionHeader("Pending upload", pendingCount, "Waiting for the next backup", Color(0xFFF59E0B)) }
-                    items(pending, key = { it.id }) { record -> FileHubRow(record) { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") } }
-                }
-                if (status.isNotEmpty()) items(files, key = { it.id }) { record -> FileHubRow(record) { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") } }
-                if (status.isEmpty() && other.isNotEmpty()) {
-                    item { SectionHeader("Other status", other.size, "Needs attention", Color(0xFFE34D59)) }
-                    items(other, key = { it.id }) { record -> FileHubRow(record) { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") } }
-                }
+            else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                if (status.isEmpty() && uploaded.isNotEmpty()) { item { SectionHeader("Uploaded", uploadedCount, "Backed up to Telegram", Green) }; items(uploaded, key = { it.id }) { FileHubRow(it, nav) } }
+                if (status.isEmpty() && pending.isNotEmpty()) { item { SectionHeader("Pending", pendingCount, "Waiting to upload", Orange) }; items(pending, key = { it.id }) { FileHubRow(it, nav) } }
+                if (status.isNotEmpty()) items(files, key = { it.id }) { FileHubRow(it, nav) }
+                if (status.isEmpty() && other.isNotEmpty()) { item { SectionHeader("Other status", other.size, "Needs attention", MaterialTheme.colorScheme.error) }; items(other, key = { it.id }) { FileHubRow(it, nav) } }
             }
         }
     }
 }
 
-@Composable
-private fun StatusPills(selected: String, uploaded: Int, pending: Int, onSelected: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        StatusPill("All", "", selected == "", onSelected, null)
-        StatusPill("✓ ${Format.count(uploaded)}", "UPLOADED", selected == "UPLOADED", onSelected, Color(0xFF20A463))
-        StatusPill("◷ ${Format.count(pending)}", "PENDING", selected == "PENDING", onSelected, Color(0xFFF59E0B))
+@Composable private fun CategoryShortcut(filter: FileFilter, selected: Boolean, onClick: () -> Unit) {
+    val accent = when (filter.category) { BackupCategory.PHOTOS -> Color(0xFF25B5A7); BackupCategory.VIDEOS -> Orange; BackupCategory.PDFS -> Color(0xFFE53935); BackupCategory.WORD_EXCEL -> Color(0xFF3478D4); BackupCategory.AUDIO -> Purple; else -> Purple }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(58.dp).clickable(onClick = onClick)) {
+        Surface(Modifier.size(48.dp), RoundedCornerShape(14.dp), color = if (selected) PurpleSoft else Color.White, tonalElevation = 1.dp) { Box(contentAlignment = Alignment.Center) { Icon(filter.icon, null, tint = if (selected) Purple else accent, modifier = Modifier.size(24.dp)) } }
+        Spacer(Modifier.height(4.dp)); Text(filter.label, style = MaterialTheme.typography.labelSmall, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
-@Composable
-private fun RowScope.StatusPill(label: String, value: String, selected: Boolean, onSelected: (String) -> Unit, accent: Color?) {
-    FilterChip(selected = selected, onClick = { onSelected(value) }, label = { Text(label) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(15.dp), colors = FilterChipDefaults.filterChipColors(selectedContainerColor = accent?.copy(alpha = 0.14f) ?: Color(0xFFE9D7FF), selectedLabelColor = accent ?: Color(0xFF5B21B6)))
-}
-
-@Composable
-private fun SectionHeader(title: String, count: Int, subtitle: String, accent: Color) {
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(7.dp))
-                Surface(shape = RoundedCornerShape(10.dp), color = accent.copy(alpha = 0.12f)) { Text(Format.count(count), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) }
-            }
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+@Composable private fun RowScope.StatusCard(title: String, count: String, accent: Color, soft: Color, selected: Boolean, onClick: () -> Unit) {
+    Card(Modifier.weight(1f).clickable(onClick = onClick), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = if (selected) soft else Color.White), border = if (selected) BorderStroke(1.dp, accent.copy(alpha = .55f)) else null) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Surface(Modifier.size(28.dp), CircleShape, color = soft) { Box(contentAlignment = Alignment.Center) { Icon(if (accent == Green) Icons.Default.CheckCircle else Icons.Default.Schedule, null, tint = accent, modifier = Modifier.size(18.dp)) } }; Spacer(Modifier.width(8.dp)); Column { Text(title, style = MaterialTheme.typography.labelSmall); Text(count, fontWeight = FontWeight.Bold, color = accent) } }
     }
 }
 
-@Composable
-private fun FileHubRow(record: FileRecord, onClick: () -> Unit) {
-    val background = when (record.category) {
-        BackupCategory.PHOTOS -> Color(0xFFEAF2FF)
-        BackupCategory.VIDEOS -> Color(0xFFFFF4DD)
-        BackupCategory.PDFS -> Color(0xFFE2F8FA)
-        BackupCategory.WORD_EXCEL -> Color(0xFFE5F7EE)
-        BackupCategory.AUDIO -> Color(0xFFF0E8FF)
-        BackupCategory.CALL_RECORDINGS -> Color(0xFFFFE8EA)
-        BackupCategory.OTHER_FILES -> Color(0xFFEAF2FF)
+@Composable private fun SortPill(sort: String, onSort: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Surface(Modifier.clickable { expanded = true }, RoundedCornerShape(13.dp), color = Color.White, tonalElevation = 1.dp) { Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Sort, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text(sortLabel(sort), style = MaterialTheme.typography.labelMedium); Text("⌄", modifier = Modifier.padding(start = 4.dp)) } }
+        DropdownMenu(expanded, { expanded = false }) { listOf("newest" to "Newest first", "oldest" to "Oldest first", "largest" to "Largest size", "smallest" to "Smallest size", "name" to "Name (A–Z)").forEach { (v, l) -> DropdownMenuItem(text = { Text(l) }, onClick = { onSort(v); expanded = false }) } }
     }
-    val accent = when (record.category) {
-        BackupCategory.PHOTOS -> Color(0xFF2F6FEA)
-        BackupCategory.VIDEOS -> Color(0xFFF59E0B)
-        BackupCategory.PDFS -> Color(0xFF18B8C8)
-        BackupCategory.WORD_EXCEL -> Color(0xFF20A463)
-        BackupCategory.AUDIO -> Color(0xFF7C3AED)
-        BackupCategory.CALL_RECORDINGS -> Color(0xFFE34D59)
-        BackupCategory.OTHER_FILES -> Color(0xFF2F6FEA)
-    }
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilePreview(record, background, accent)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
+}
+
+@Composable private fun SectionHeader(title: String, count: Int, subtitle: String, accent: Color) { Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Row(verticalAlignment = Alignment.CenterVertically) { Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold); Spacer(Modifier.width(7.dp)); Surface(shape = RoundedCornerShape(10.dp), color = accent.copy(alpha = .12f)) { Text(Format.count(count), Modifier.padding(horizontal = 7.dp, vertical = 3.dp), color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold) } }; Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+
+@Composable private fun FileHubRow(record: FileRecord, nav: NavHostController) {
+    var menu by remember { mutableStateOf(false) }
+    val accent = categoryAccent(record.category)
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilePreview(record, categorySoft(record.category), accent); Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f).clickable { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") }) {
                 Text(record.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
-                Text("${categoryLabel(record.category)} • ${Format.bytes(record.sizeBytes)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).clip(RoundedCornerShape(4.dp)).background(if (record.status == UploadStatus.UPLOADED) Color(0xFF20A463) else accent))
-                    Spacer(Modifier.width(5.dp))
-                    Text(if (record.status == UploadStatus.UPLOADED) "Backed up to Telegram" else if (record.status == UploadStatus.PENDING) "Pending upload" else record.status.name.lowercase(Locale.getDefault()).replace('_', ' '), style = MaterialTheme.typography.labelSmall, color = if (record.status == UploadStatus.UPLOADED) Color(0xFF20A463) else accent)
-                }
+                Text("${Format.bytes(record.sizeBytes)} • ${record.category.name.lowercase(Locale.getDefault()).replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(7.dp).clip(CircleShape).background(if (record.status == UploadStatus.UPLOADED) Green else accent)); Spacer(Modifier.width(5.dp)); Text(if (record.status == UploadStatus.UPLOADED) "Backed up to Telegram" else if (record.status == UploadStatus.PENDING) "Pending upload" else "Needs attention", style = MaterialTheme.typography.labelSmall, color = if (record.status == UploadStatus.UPLOADED) Green else accent) }
             }
-            Text("›", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box { IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "File actions") }; DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.ImageIcon, null) }, text = { Text("Preview") }, onClick = { menu = false; nav.navigate("${Routes.FILE_VIEWER}/${record.id}") })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.CloudUpload, null) }, text = { Text("Upload now") }, onClick = { menu = false })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Download, null) }, text = { Text("Download") }, onClick = { menu = false })
+                DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Send, null) }, text = { Text("View in Telegram") }, onClick = { menu = false })
+                HorizontalDivider(); DropdownMenuItem(leadingIcon = { Icon(Icons.Default.Info, null) }, text = { Text("File details") }, onClick = { menu = false }); DropdownMenuItem(leadingIcon = { Icon(Icons.Default.DeleteOutline, null) }, text = { Text("Delete") }, onClick = { menu = false })
+            } }
         }
     }
 }
 
-@Composable
-private fun FilePreview(record: FileRecord, background: Color, accent: Color) {
+@Composable private fun FilePreview(record: FileRecord, background: Color, accent: Color) {
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(null, record.uri, record.modifiedAtMillis) { value = withContext(Dispatchers.IO) { loadPreviewBitmap(context, record) } }
-    Box(Modifier.size(64.dp).clip(RoundedCornerShape(15.dp)).background(background), contentAlignment = Alignment.Center) {
-        if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        else when (record.category) {
-            BackupCategory.PHOTOS -> Icon(Icons.Default.ImageIcon, null, tint = accent, modifier = Modifier.size(30.dp))
-            BackupCategory.VIDEOS -> Icon(Icons.Default.VideoFile, null, tint = accent, modifier = Modifier.size(30.dp))
-            BackupCategory.AUDIO, BackupCategory.CALL_RECORDINGS -> Icon(Icons.Default.AudioFile, null, tint = accent, modifier = Modifier.size(30.dp))
-            BackupCategory.PDFS, BackupCategory.WORD_EXCEL -> Icon(Icons.Default.Description, null, tint = accent, modifier = Modifier.size(30.dp))
-            BackupCategory.OTHER_FILES -> Text(extensionLabel(record.displayName), color = accent, fontWeight = FontWeight.Bold)
+    Box(Modifier.size(62.dp).clip(RoundedCornerShape(14.dp)).background(background), contentAlignment = Alignment.Center) {
+        if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else when (record.category) {
+            BackupCategory.PHOTOS -> Icon(Icons.Default.ImageIcon, null, tint = accent, modifier = Modifier.size(29.dp)); BackupCategory.VIDEOS -> Icon(Icons.Default.VideoFile, null, tint = accent, modifier = Modifier.size(29.dp)); BackupCategory.AUDIO, BackupCategory.CALL_RECORDINGS -> Icon(Icons.Default.AudioFile, null, tint = accent, modifier = Modifier.size(29.dp)); BackupCategory.PDFS, BackupCategory.WORD_EXCEL -> Icon(Icons.Default.Description, null, tint = accent, modifier = Modifier.size(29.dp)); BackupCategory.OTHER_FILES -> Text(extensionLabel(record.displayName), color = accent, fontWeight = FontWeight.Bold)
         }
-        if (record.status == UploadStatus.PENDING) Surface(Modifier.align(Alignment.BottomEnd).padding(4.dp).size(19.dp), RoundedCornerShape(10.dp), color = Color.White) { Icon(Icons.Default.Upload, null, tint = Color(0xFFF59E0B), modifier = Modifier.padding(3.dp)) }
+        if (record.status == UploadStatus.PENDING) Surface(Modifier.align(Alignment.BottomEnd).padding(3.dp).size(19.dp), CircleShape, color = Color.White) { Icon(Icons.Default.Upload, null, tint = Orange, modifier = Modifier.padding(3.dp)) }
+        if (record.status == UploadStatus.UPLOADED) Surface(Modifier.align(Alignment.BottomEnd).padding(3.dp).size(19.dp), CircleShape, color = Color.White) { Icon(Icons.Default.CheckCircle, null, tint = Green, modifier = Modifier.padding(2.dp)) }
     }
 }
 
-private fun loadPreviewBitmap(context: android.content.Context, record: FileRecord): Bitmap? {
-    val uri = Uri.parse(record.uri)
-    if (uri.scheme.equals("file", true)) {
-        val path = uri.path ?: return null
-        if (!File(path).isFile) return null
-        return when (record.category) {
-            BackupCategory.PHOTOS -> BitmapFactory.decodeFile(path)
-            BackupCategory.VIDEOS -> runCatching { MediaMetadataRetriever().let { r -> r.setDataSource(path); val b = r.getFrameAtTime(0); r.release(); b } }.getOrNull()
-            else -> null
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun FileFiltersSheet(selectedCategory: BackupCategory?, status: String, sort: String, onCategory: (BackupCategory?) -> Unit, onStatus: (String) -> Unit, onSort: (String) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color.White, dragHandle = { BottomSheetDefaults.DragHandle() }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 18.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Filters & Sort", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Fine tune your file list", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }; IconButton(onClick = onDismiss) { Icon(Icons.Default.Clear, "Close") } }
+            Spacer(Modifier.height(12.dp)); FilterSheetTitle("File type")
+            fileFilters.chunked(3).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { row.forEach { filter -> FilterTile(filter.label, filter.icon, selectedCategory == filter.category, Modifier.weight(1f)) { onCategory(filter.category) }; }; repeat(3 - row.size) { Spacer(Modifier.weight(1f)) } }; Spacer(Modifier.height(8.dp)) }
+            FilterSheetTitle("Upload status"); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChoice("All files", status.isEmpty(), Purple, Modifier.weight(1f)) { onStatus("") }; FilterChoice("Uploaded", status == "UPLOADED", Green, Modifier.weight(1f)) { onStatus("UPLOADED") }; FilterChoice("Pending", status == "PENDING", Orange, Modifier.weight(1f)) { onStatus("PENDING") } }
+            Spacer(Modifier.height(13.dp)); FilterSheetTitle("Sort by")
+            listOf("newest" to "Newest first", "oldest" to "Oldest first", "largest" to "Largest size", "smallest" to "Smallest size", "name" to "Name (A–Z)", "name_desc" to "Name (Z–A)").forEach { (value, label) -> Row(Modifier.fillMaxWidth().clickable { onSort(value) }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(selected = sort == value, onClick = { onSort(value) }, colors = RadioButtonDefaults.colors(selectedColor = Purple)); Text(label, modifier = Modifier.padding(start = 4.dp)) } }
+            Spacer(Modifier.height(6.dp)); FilterSheetTitle("Date range"); OutlinedButton(onClick = {}, Modifier.fillMaxWidth(), shape = RoundedCornerShape(13.dp)) { Icon(Icons.Default.CalendarMonth, null); Spacer(Modifier.width(8.dp)); Text("Any time"); Spacer(Modifier.weight(1f)); Text("⌄") }
+            Spacer(Modifier.height(16.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { OutlinedButton(onClick = onReset, Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) { Text("Reset") }; Button(onClick = onDismiss, Modifier.weight(1f), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Purple)) { Text("Apply") } }
         }
     }
-    if (uri.scheme.equals("content", true)) return when (record.category) {
-        BackupCategory.PHOTOS -> runCatching { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) }.getOrNull()
-        BackupCategory.VIDEOS -> runCatching { MediaMetadataRetriever().let { r -> r.setDataSource(context, uri); val b = r.getFrameAtTime(0); r.release(); b } }.getOrNull()
-        else -> null
-    }
-    return null
 }
 
-@Composable
-private fun EmptyFiles(query: String) {
-    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Search, null, tint = Color(0xFF7C3AED), modifier = Modifier.size(44.dp))
-            Spacer(Modifier.height(12.dp))
-            Text(if (query.isBlank()) "No files yet" else "No matching files", fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(if (query.isBlank()) "Connect Telegram and run a backup to populate your AirDrive inventory." else "Try another name, extension or category.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
+@Composable private fun FilterSheetTitle(text: String) { Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 7.dp)) }
+@Composable private fun FilterTile(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, modifier: Modifier, onClick: () -> Unit) { Surface(modifier.clickable(onClick = onClick), RoundedCornerShape(14.dp), color = if (selected) PurpleSoft else Color(0xFFFBFCFF), border = if (selected) BorderStroke(1.dp, Purple.copy(alpha = .65f)) else null) { Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) { Icon(icon, null, tint = if (selected) Purple else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)); Spacer(Modifier.height(5.dp)); Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal) } } }
+@Composable private fun FilterChoice(label: String, selected: Boolean, accent: Color, modifier: Modifier, onClick: () -> Unit) { Surface(modifier.clickable(onClick = onClick), RoundedCornerShape(13.dp), color = if (selected) accent.copy(alpha = .09f) else Color(0xFFFBFCFF), border = if (selected) BorderStroke(1.dp, accent.copy(alpha = .5f)) else null) { Column(Modifier.padding(vertical = 11.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) { Icon(if (label == "Uploaded") Icons.Default.CheckCircle else if (label == "Pending") Icons.Default.Schedule else Icons.Default.GridView, null, tint = accent, modifier = Modifier.size(19.dp)); Spacer(Modifier.height(4.dp)); Text(label, style = MaterialTheme.typography.labelSmall) } } }
+@Composable private fun EmptyFiles(query: String) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.Search, null, tint = Purple, modifier = Modifier.size(42.dp)); Spacer(Modifier.height(8.dp)); Text(if (query.isBlank()) "No files found" else "No files match your search", fontWeight = FontWeight.SemiBold); Text("Try another filter or search term", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+private fun sortLabel(sort: String) = when (sort) { "oldest" -> "Oldest first"; "largest" -> "Largest size"; "smallest" -> "Smallest size"; "name" -> "Name (A–Z)"; "name_desc" -> "Name (Z–A)"; else -> "Newest first" }
+private fun categoryAccent(category: BackupCategory) = when (category) { BackupCategory.PHOTOS -> Color(0xFF25B5A7); BackupCategory.VIDEOS -> Orange; BackupCategory.PDFS -> Color(0xFFE53935); BackupCategory.WORD_EXCEL -> Color(0xFF3478D4); BackupCategory.AUDIO -> Purple; BackupCategory.CALL_RECORDINGS -> Color(0xFFE85D75); BackupCategory.OTHER_FILES -> Color(0xFF60758F) }
+private fun categorySoft(category: BackupCategory) = categoryAccent(category).copy(alpha = .10f)
+private fun loadPreviewBitmap(context: android.content.Context, record: FileRecord): Bitmap? { val uri = Uri.parse(record.uri); if (uri.scheme.equals("file", true)) { val path = uri.path ?: return null; if (!File(path).isFile) return null; return when (record.category) { BackupCategory.PHOTOS -> BitmapFactory.decodeFile(path); BackupCategory.VIDEOS -> runCatching { MediaMetadataRetriever().let { r -> r.setDataSource(path); val b = r.getFrameAtTime(0); r.release(); b } }.getOrNull(); else -> null } }; if (uri.scheme.equals("content", true)) return when (record.category) { BackupCategory.PHOTOS -> runCatching { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) }.getOrNull(); BackupCategory.VIDEOS -> runCatching { MediaMetadataRetriever().let { r -> r.setDataSource(context, uri); val b = r.getFrameAtTime(0); r.release(); b } }.getOrNull(); else -> null }; return null }
+private fun extensionLabel(name: String) = name.substringAfterLast('.', "FILE").uppercase(Locale.getDefault()).take(5)
