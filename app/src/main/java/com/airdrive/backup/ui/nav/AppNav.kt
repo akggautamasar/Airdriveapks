@@ -105,62 +105,22 @@ fun AppNav(deepLinkRoute: String? = null) {
 
     LaunchedEffect(Unit) {
         combine(settings.onboardingDone, settings.telegramLoggedIn) { done, loggedIn -> done to loggedIn }.collect { (done, loggedIn) ->
-            if (startDestination == null) {
-                startDestination = when {
-                    !done -> Routes.WELCOME
-                    !loggedIn -> Routes.TELEGRAM_LOGIN
-                    else -> Routes.DASHBOARD
-                }
-            }
+            if (startDestination == null) startDestination = when { !done -> Routes.WELCOME; !loggedIn -> Routes.TELEGRAM_LOGIN; else -> Routes.DASHBOARD }
         }
     }
-
     val resolved = startDestination
-    if (resolved == null) {
-        LaunchScreen()
-        return
-    }
-
-    LaunchedEffect(resolved, deepLinkRoute) {
-        if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) {
-            runCatching { navController.navigate(deepLinkRoute) }
-        }
-    }
+    if (resolved == null) { LaunchScreen(); return }
+    LaunchedEffect(resolved, deepLinkRoute) { if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) runCatching { navController.navigate(deepLinkRoute) } }
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-    val showBottomBar = currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER || bottomTabs.any { it.route == currentRoute }
-    val selectedTabRoute = if (currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER) Routes.CATEGORIES_STATS else currentRoute
+    val showBottomBar = currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER || currentRoute?.startsWith(Routes.GALLERY) == true || bottomTabs.any { it.route == currentRoute }
+    val selectedTabRoute = if (currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER || currentRoute?.startsWith(Routes.GALLERY) == true) Routes.CATEGORIES_STATS else currentRoute
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            if (showBottomBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                bottomTabs.forEach { tab ->
-                    NavigationBarItem(
-                        selected = selectedTabRoute == tab.route,
-                        onClick = {
-                            if (currentRoute != tab.route) {
-                                navController.navigate(tab.route) {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                            indicatorColor = AirNavSelected,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    )
-                }
-            }
+    Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
+        if (showBottomBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+            bottomTabs.forEach { tab -> NavigationBarItem(selected = selectedTabRoute == tab.route, onClick = { if (currentRoute != tab.route) navController.navigate(tab.route) { popUpTo(navController.graph.startDestinationId) { saveState = true }; launchSingleTop = true; restoreState = true } }, icon = { Icon(tab.icon, contentDescription = tab.label) }, label = { Text(tab.label) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = MaterialTheme.colorScheme.onSurface, selectedTextColor = MaterialTheme.colorScheme.onSurface, indicatorColor = AirNavSelected, unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant, unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant)) }
         }
-    ) { paddingValues ->
+    }) { paddingValues ->
         NavHost(navController = navController, startDestination = resolved, modifier = Modifier.padding(paddingValues)) {
             composable(Routes.WELCOME) { WelcomeScreen(navController) }
             composable(Routes.TELEGRAM_LOGIN) { TelegramLoginScreen(navController) }
@@ -190,44 +150,27 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.DELETED_FILES) { DeletedFilesScreen(navController) }
             composable(Routes.SEARCH) { SearchScreen(navController) }
             composable(Routes.GALLERY) { IncrementalGalleryScreen(navController) }
+            composable("${Routes.GALLERY}/{kind}", arguments = listOf(navArgument("kind") { type = NavType.StringType })) { entry -> IncrementalGalleryScreen(navController, entry.arguments?.getString("kind") ?: "all") }
             composable("${Routes.CATEGORY_DETAIL}/{category}", arguments = listOf(navArgument("category") { type = NavType.StringType })) { entry ->
                 val raw = entry.arguments?.getString("category")
                 val category = BackupCategory.values().find { it.name == raw }
                 FilesHubScreen(navController, category)
             }
-            composable("${Routes.FILE_VIEWER}/{recordId}", arguments = listOf(navArgument("recordId") { type = NavType.LongType })) { entry ->
-                FileViewerScreen(navController, entry.arguments?.getLong("recordId") ?: 0L)
-            }
+            composable("${Routes.FILE_VIEWER}/{recordId}", arguments = listOf(navArgument("recordId") { type = NavType.LongType })) { entry -> FileViewerScreen(navController, entry.arguments?.getLong("recordId") ?: 0L) }
             composable(Routes.MIGRATE) { MigrationScreen(navController) }
             composable(Routes.CLEANUP) { CleanupScreen(navController) }
             composable(Routes.VERIFY) { VerifyScreen(navController) }
             composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
-            composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry ->
-                RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L)
-            }
+            composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry -> RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L) }
         }
     }
 }
 
-@Composable
-private fun LaunchScreen() {
+@Composable private fun LaunchScreen() {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Surface(modifier = Modifier.size(88.dp), shape = RoundedCornerShape(26.dp), color = Color(0xFF2F6FEA), shadowElevation = 12.dp) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Cloud, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp))
-                }
-            }
-            Spacer(Modifier.size(20.dp))
-            Text("AirDrive", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.size(5.dp))
-            Text("Your files. Backed up. Always with you.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.size(26.dp))
-            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp, color = Color(0xFF2F6FEA))
+        Column(Modifier.fillMaxSize().padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Surface(Modifier.size(88.dp), RoundedCornerShape(26.dp), color = Color(0xFF2F6FEA), shadowElevation = 12.dp) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Cloud, null, tint = Color.White, modifier = Modifier.size(48.dp)) } }
+            Spacer(Modifier.size(20.dp)); Text("AirDrive", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Spacer(Modifier.size(5.dp)); Text("Your files. Backed up. Always with you.", color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.size(26.dp)); CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp, color = Color(0xFF2F6FEA))
         }
     }
 }
