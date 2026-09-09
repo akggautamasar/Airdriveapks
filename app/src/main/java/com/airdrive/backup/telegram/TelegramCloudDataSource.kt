@@ -7,12 +7,7 @@ import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
-/**
- * Media3 DataSource backed by Telegram/TDLib byte ranges.
- *
- * It deliberately never writes the file to the user's Downloads/Documents folders. Media3 asks
- * for the bytes it needs and TDLib fetches only those ranges into its private cache.
- */
+/** Media3 byte-range source backed directly by TDLib's Telegram file cache. */
 class TelegramCloudDataSource(
     private val tdClient: TdClient,
     private val chatId: Long,
@@ -41,8 +36,6 @@ class TelegramCloudDataSource(
         if (length == 0) return 0
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
 
-        // Keep requests reasonably large so Telegram latency does not become visible for every
-        // tiny extractor read, while still avoiding a full-file download.
         val requested = minOf(length, 512 * 1024)
         val bytes = try {
             runBlocking(Dispatchers.IO) {
@@ -61,6 +54,8 @@ class TelegramCloudDataSource(
     }
 
     override fun getUri() = null
+
+    override fun getResponseHeaders(): Map<String, List<String>> = emptyMap()
 
     override fun close() {
         opened = false
