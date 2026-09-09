@@ -31,14 +31,7 @@ sealed class ChannelCheck { data class Ok(val title: String) : ChannelCheck(); d
 data class ResolvedChat(val chatId: Long, val title: String)
 data class DownloadedFile(val path: String, val fileName: String, val sizeBytes: Long)
 sealed class RemoteFile { data class Present(val fileName: String, val sizeBytes: Long) : RemoteFile(); data class Missing(val reason: String) : RemoteFile(); data class Unknown(val reason: String) : RemoteFile() }
-data class TelegramChannelFile(
-    val chatId: Long,
-    val messageId: Long,
-    val fileName: String,
-    val sizeBytes: Long,
-    val categoryName: String,
-    val dateMillis: Long
-)
+data class TelegramChannelFile(val chatId: Long, val messageId: Long, val fileName: String, val sizeBytes: Long, val categoryName: String, val dateMillis: Long)
 private sealed class SendOutcome { data class Success(val messageId: Long) : SendOutcome(); data class Failed(val code: Int, val reason: String) : SendOutcome() }
 
 class TdClient private constructor(private val appContext: Context) {
@@ -63,38 +56,9 @@ class TdClient private constructor(private val appContext: Context) {
     @Volatile var onDownloadProgress: ((Int, Long, Long) -> Unit)? = null
 
     fun start() { if (client != null) return; client = Client.create({ update -> handleUpdate(update) }, null, null) }
-    private fun handleUpdate(update: TdApi.Object) {
-        when (update) {
-            is TdApi.UpdateAuthorizationState -> onAuthorizationState(update.authorizationState)
-            is TdApi.UpdateNewChat -> knownChatIds.add(update.chat.id)
-            is TdApi.UpdateMessageSendSucceeded -> completeSend(update.oldMessageId, SendOutcome.Success(update.message.id))
-            is TdApi.UpdateMessageSendFailed -> completeSend(update.oldMessageId, SendOutcome.Failed(update.error.code, update.error.message ?: "send failed"))
-            is TdApi.UpdateFile -> reportFileProgress(update.file)
-            else -> Unit
-        }
-    }
-    private fun reportFileProgress(file: TdApi.File) {
-        val total = (if (file.expectedSize > 0) file.expectedSize else file.size).toLong()
-        val downloadListener = onDownloadProgress
-        val local = file.local
-        if (downloadListener != null && local != null && local.downloadedSize > 0) downloadListener(file.id, local.downloadedSize.toLong(), total)
-        val uploadListener = onUploadProgress ?: return
-        val path = local?.path ?: return
-        val remote = file.remote ?: return
-        uploadListener(path, remote.uploadedSize.toLong(), total)
-    }
-    private fun onAuthorizationState(state: TdApi.AuthorizationState) {
-        when (state) {
-            is TdApi.AuthorizationStateWaitTdlibParameters -> { awaitingParameters = true; sendTdlibParameters() }
-            is TdApi.AuthorizationStateWaitPhoneNumber -> { awaitingParameters = false; _authState.value = AuthState.WAIT_PHONE_NUMBER }
-            is TdApi.AuthorizationStateWaitCode -> _authState.value = AuthState.WAIT_CODE
-            is TdApi.AuthorizationStateWaitPassword -> _authState.value = AuthState.WAIT_PASSWORD
-            is TdApi.AuthorizationStateReady -> { awaitingParameters = false; chatListLoaded = false; _authState.value = AuthState.READY }
-            is TdApi.AuthorizationStateLoggingOut -> resetSession(AuthState.LOGGED_OUT)
-            is TdApi.AuthorizationStateClosed -> resetSession(AuthState.CLOSED)
-            else -> Unit
-        }
-    }
+    private fun handleUpdate(update: TdApi.Object) { when (update) { is TdApi.UpdateAuthorizationState -> onAuthorizationState(update.authorizationState); is TdApi.UpdateNewChat -> knownChatIds.add(update.chat.id); is TdApi.UpdateMessageSendSucceeded -> completeSend(update.oldMessageId, SendOutcome.Success(update.message.id)); is TdApi.UpdateMessageSendFailed -> completeSend(update.oldMessageId, SendOutcome.Failed(update.error.code, update.error.message ?: "send failed")); is TdApi.UpdateFile -> reportFileProgress(update.file); else -> Unit } }
+    private fun reportFileProgress(file: TdApi.File) { val total = (if (file.expectedSize > 0) file.expectedSize else file.size).toLong(); val downloadListener = onDownloadProgress; val local = file.local; if (downloadListener != null && local != null && local.downloadedSize > 0) downloadListener(file.id, local.downloadedSize.toLong(), total); val uploadListener = onUploadProgress ?: return; val path = local?.path ?: return; val remote = file.remote ?: return; uploadListener(path, remote.uploadedSize.toLong(), total) }
+    private fun onAuthorizationState(state: TdApi.AuthorizationState) { when (state) { is TdApi.AuthorizationStateWaitTdlibParameters -> { awaitingParameters = true; sendTdlibParameters() }; is TdApi.AuthorizationStateWaitPhoneNumber -> { awaitingParameters = false; _authState.value = AuthState.WAIT_PHONE_NUMBER }; is TdApi.AuthorizationStateWaitCode -> _authState.value = AuthState.WAIT_CODE; is TdApi.AuthorizationStateWaitPassword -> _authState.value = AuthState.WAIT_PASSWORD; is TdApi.AuthorizationStateReady -> { awaitingParameters = false; chatListLoaded = false; _authState.value = AuthState.READY }; is TdApi.AuthorizationStateLoggingOut -> resetSession(AuthState.LOGGED_OUT); is TdApi.AuthorizationStateClosed -> resetSession(AuthState.CLOSED); else -> Unit } }
     private fun resetSession(next: AuthState) { knownChatIds.clear(); chatListLoaded = false; selfChatId = 0L; _authState.value = next }
     private fun sendTdlibParameters() { scope.launch { val creds = settings.apiCredentials.first(); if (!creds.isUsable) { _authState.value = AuthState.NEEDS_CREDENTIALS; return@launch }; val params = TdApi.SetTdlibParameters().apply { useTestDc = false; databaseDirectory = appContext.filesDir.absolutePath + "/tdlib"; filesDirectory = appContext.filesDir.absolutePath + "/tdlib-files"; useFileDatabase = true; useChatInfoDatabase = true; useMessageDatabase = true; useSecretChats = false; apiId = creds.apiId; apiHash = creds.apiHash; systemLanguageCode = "en"; deviceModel = android.os.Build.MODEL ?: "Android"; systemVersion = android.os.Build.VERSION.RELEASE ?: "unknown"; applicationVersion = BuildConfig.VERSION_NAME }; try { send(params); _lastAuthError.value = null } catch (e: Exception) { _lastAuthError.value = e.message ?: e.javaClass.simpleName; _authState.value = AuthState.NEEDS_CREDENTIALS } } }
     fun retryTdlibParameters() { if (!awaitingParameters) return; _authState.value = AuthState.UNKNOWN; sendTdlibParameters() }
@@ -117,104 +81,15 @@ class TdClient private constructor(private val appContext: Context) {
     private fun telegramPath(text: String): String? { val lower = text.lowercase(); for (host in listOf("t.me/", "telegram.me/", "telegram.dog/")) { val at = lower.indexOf(host); if (at >= 0) return text.substring(at + host.length).trim().trimEnd('/') }; return null }
     suspend fun createChannel(title: String): ResolvedChat { val name = title.trim().take(128).ifBlank { "AirDrive Backup" }; val chat = send(TdApi.CreateNewSupergroupChat().apply { this.title = name; isChannel = true; description = "Created by AirDrive"; location = null; forImport = false }) as TdApi.Chat; knownChatIds.add(chat.id); return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { name }) }
     suspend fun checkChannel(chatId: Long): ChannelCheck = try { val chat = requireChat(chatId); ChannelCheck.Ok(chat.title.orEmpty().ifBlank { "(untitled channel)" }) } catch (e: Exception) { ChannelCheck.Failed(e.message ?: e.javaClass.simpleName) }
-
-    /** Streams the complete Telegram history for a channel, newest to oldest, without downloading files. */
-    suspend fun scanChannelFiles(chatId: Long, onPage: (Int) -> Unit = {}): List<TelegramChannelFile> {
-        requireChat(chatId)
-        val result = ArrayList<TelegramChannelFile>()
-        var fromMessageId = 0L
-        var pages = 0
-        var retryAttempt = 0
-        while (true) {
-            val history = try {
-                send(TdApi.GetChatHistory().apply { this.chatId = chatId; this.fromMessageId = fromMessageId; offset = 0; limit = 100; onlyLocal = false }) as TdApi.Messages
-            } catch (e: TdLibException) {
-                val retryable = e.code == 429 || e.code == 500 || e.code == 408
-                if (!retryable || retryAttempt >= 12) throw e
-                val retrySeconds = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull()?.coerceIn(1L, 600L) ?: (2L shl retryAttempt.coerceAtMost(8))
-                retryAttempt++
-                delay(retrySeconds * 1000L)
-                continue
-            }
-            retryAttempt = 0
-            if (history.messages.isEmpty()) break
-            pages++
-            history.messages.forEach { message -> telegramFileFromMessage(message, chatId)?.let { result += it } }
-            onPage(result.size)
-            val oldest = history.messages.last().id
-            if (oldest <= 1L || oldest == fromMessageId) break
-            fromMessageId = oldest
-        }
-        return result
-    }
-
-    private fun telegramFileFromMessage(message: TdApi.Message, chatId: Long): TelegramChannelFile? {
-        val content = message.content
-        val nameAndSize = when (content) {
-            is TdApi.MessageDocument -> content.document.fileName.orEmpty().ifBlank { "file" } to content.document.document.size.toLong()
-            is TdApi.MessageVideo -> content.video.fileName.orEmpty().ifBlank { "video.mp4" } to content.video.video.size.toLong()
-            is TdApi.MessageAudio -> content.audio.fileName.orEmpty().ifBlank { "audio" } to content.audio.audio.size.toLong()
-            is TdApi.MessageAnimation -> content.animation.fileName.orEmpty().ifBlank { "animation" } to content.animation.animation.size.toLong()
-            is TdApi.MessagePhoto -> "photo.jpg" to (content.photo.sizes.maxByOrNull { it.photo.size }?.photo?.size?.toLong() ?: 0L)
-            else -> null
-        } ?: return null
-        return TelegramChannelFile(chatId, message.id, nameAndSize.first, nameAndSize.second, categoryForName(nameAndSize.first), message.date.toLong() * 1000L)
-    }
-    private fun categoryForName(name: String): String {
-        val n = name.lowercase()
-        return when {
-            n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".heic") || n.endsWith(".gif") -> "PHOTOS"
-            n.endsWith(".mp4") || n.endsWith(".mkv") || n.endsWith(".webm") || n.endsWith(".mov") || n.endsWith(".avi") -> "VIDEOS"
-            n.endsWith(".pdf") -> "PDFS"
-            n.endsWith(".doc") || n.endsWith(".docx") || n.endsWith(".xls") || n.endsWith(".xlsx") || n.endsWith(".ppt") || n.endsWith(".pptx") || n.endsWith(".txt") || n.endsWith(".csv") -> "WORD_EXCEL"
-            n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".aac") || n.endsWith(".wav") || n.endsWith(".flac") || n.endsWith(".ogg") -> "AUDIO"
-            else -> "OTHER_FILES"
-        }
-    }
-
+    suspend fun scanChannelFiles(chatId: Long, onPage: (Int) -> Unit = {}): List<TelegramChannelFile> { requireChat(chatId); val result = ArrayList<TelegramChannelFile>(); var fromMessageId = 0L; var retryAttempt = 0; while (true) { val history = try { send(TdApi.GetChatHistory().apply { this.chatId = chatId; this.fromMessageId = fromMessageId; offset = 0; limit = 100; onlyLocal = false }) as TdApi.Messages } catch (e: TdLibException) { val retryable = e.code == 429 || e.code == 500 || e.code == 408; if (!retryable || retryAttempt >= 12) throw e; val retrySeconds = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull()?.coerceIn(1L, 600L) ?: (2L shl retryAttempt.coerceAtMost(8)); retryAttempt++; delay(retrySeconds * 1000L); continue }; retryAttempt = 0; if (history.messages.isEmpty()) break; history.messages.forEach { message -> telegramFileFromMessage(message, chatId)?.let { result += it } }; onPage(result.size); val oldest = history.messages.last().id; if (oldest <= 1L || oldest == fromMessageId) break; fromMessageId = oldest }; return result }
+    private fun telegramFileFromMessage(message: TdApi.Message, chatId: Long): TelegramChannelFile? { val content = message.content; val nameAndSize = when (content) { is TdApi.MessageDocument -> content.document.fileName.orEmpty().ifBlank { "file" } to content.document.document.size.toLong(); is TdApi.MessageVideo -> content.video.fileName.orEmpty().ifBlank { "video.mp4" } to content.video.video.size.toLong(); is TdApi.MessageAudio -> content.audio.fileName.orEmpty().ifBlank { "audio" } to content.audio.audio.size.toLong(); is TdApi.MessageAnimation -> content.animation.fileName.orEmpty().ifBlank { "animation" } to content.animation.animation.size.toLong(); is TdApi.MessagePhoto -> "photo.jpg" to (content.photo.sizes.maxByOrNull { it.photo.size }?.photo?.size?.toLong() ?: 0L); else -> null } ?: return null; return TelegramChannelFile(chatId, message.id, nameAndSize.first, nameAndSize.second, categoryForName(nameAndSize.first), message.date.toLong() * 1000L) }
+    private fun categoryForName(name: String): String { val n = name.lowercase(); return when { n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".heic") || n.endsWith(".gif") -> "PHOTOS"; n.endsWith(".mp4") || n.endsWith(".mkv") || n.endsWith(".webm") || n.endsWith(".mov") || n.endsWith(".avi") -> "VIDEOS"; n.endsWith(".pdf") -> "PDFS"; n.endsWith(".doc") || n.endsWith(".docx") || n.endsWith(".xls") || n.endsWith(".xlsx") || n.endsWith(".ppt") || n.endsWith(".pptx") || n.endsWith(".txt") || n.endsWith(".csv") -> "WORD_EXCEL"; n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".aac") || n.endsWith(".wav") || n.endsWith(".flac") || n.endsWith(".ogg") -> "AUDIO"; else -> "OTHER_FILES" } }
     suspend fun uploadFile(localPath: String, chatId: Long, caption: String, sizeBytes: Long): Long { var attempt = 0; while (true) { try { requireChat(chatId); return sendDocumentAndAwait(localPath, chatId, caption, sizeBytes) } catch (e: TdLibException) { val retryable = e.code == 429 || e.code == 500; if (!retryable || attempt >= 10) throw e; val retryAfter = Regex("\\d+").find(e.message ?: "")?.value?.toLongOrNull() ?: 5L; delay(retryAfter.coerceIn(1L, 600L) * 1000L); attempt++ } } }
     private suspend fun sendDocumentAndAwait(localPath: String, chatId: Long, caption: String, sizeBytes: Long): Long { val inputDocument = TdApi.InputDocument().apply { document = TdApi.InputFileLocal(localPath); thumbnail = null; disableContentTypeDetection = true }; val content = TdApi.InputMessageDocument().apply { document = inputDocument; this.caption = TdApi.FormattedText(caption, emptyArray()) }; val request = TdApi.SendMessage().apply { this.chatId = chatId; inputMessageContent = content }; val queued = send(request) as TdApi.Message; val tempId = queued.id; val waiter = registerSend(tempId); try { val budget = (180_000L + (sizeBytes / 20_000L) * 1000L).coerceAtMost(3 * 60 * 60 * 1000L); val outcome = withTimeoutOrNull(budget) { waiter.await() } ?: throw TdLibException(408, "Upload timed out after ${budget / 1000}s"); return when (outcome) { is SendOutcome.Success -> outcome.messageId; is SendOutcome.Failed -> throw TdLibException(outcome.code, outcome.reason) } } finally { forgetSend(tempId) } }
     private fun registerSend(tempId: Long): CompletableDeferred<SendOutcome> { val waiter = CompletableDeferred<SendOutcome>(); synchronized(sendLock) { val already = earlyOutcomes.remove(tempId); if (already != null) waiter.complete(already) else pendingSends[tempId] = waiter }; return waiter }
     private fun completeSend(tempId: Long, outcome: SendOutcome) { synchronized(sendLock) { val waiter = pendingSends.remove(tempId); if (waiter != null) waiter.complete(outcome) else { if (earlyOutcomes.size > 256) earlyOutcomes.clear(); earlyOutcomes[tempId] = outcome } } }
     private fun forgetSend(tempId: Long) { synchronized(sendLock) { pendingSends.remove(tempId); earlyOutcomes.remove(tempId) } }
-
-    /**
-     * Reads only a requested byte range from an uploaded Telegram file. TDLib keeps the fetched
-     * bytes in its private file cache; AirDrive never copies the complete file to Downloads or
-     * another user-visible folder. This is the primitive used by the media player and previews.
-     */
-    suspend fun downloadFileRange(chatId: Long, messageId: Long, offset: Long, limit: Int): ByteArray {
-        requireChat(chatId)
-        require(offset >= 0L) { "offset must be >= 0" }
-        require(limit > 0) { "limit must be > 0" }
-        val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message
-        val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file")
-        val file = send(TdApi.DownloadFile().apply {
-            fileId = payload.first.id
-            priority = 32
-            this.offset = offset
-            this.limit = limit
-            synchronous = true
-        }) as TdApi.File
-        val path = file.local?.path ?: throw TdLibException(500, "Telegram did not return a readable file range")
-        val available = file.local?.downloadedSize?.toLong() ?: 0L
-        val expected = minOf(limit.toLong(), (file.size.toLong() - offset).coerceAtLeast(0L))
-        val readLength = minOf(limit.toLong(), if (available > 0L) available else expected).toInt()
-        if (readLength <= 0) return ByteArray(0)
-        return RandomAccessFile(File(path), "r").use { raf ->
-            if (offset >= raf.length()) return@use ByteArray(0)
-            raf.seek(offset.coerceAtMost(raf.length()))
-            val out = ByteArray(minOf(readLength.toLong(), raf.length() - raf.filePointer).toInt())
-            var done = 0
-            while (done < out.size) {
-                val n = raf.read(out, done, out.size - done)
-                if (n <= 0) break
-                done += n
-            }
-            if (done == out.size) out else out.copyOf(done)
-        }
-    }
-
+    suspend fun downloadFileRange(chatId: Long, messageId: Long, offset: Long, limit: Int): ByteArray { requireChat(chatId); require(offset >= 0L); require(limit > 0); val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message; val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file"); val file = send(TdApi.DownloadFile().apply { fileId = payload.first.id; priority = 32; this.offset = offset; this.limit = limit.toLong(); synchronous = true }) as TdApi.File; val path = file.local?.path ?: throw TdLibException(500, "Telegram did not return a readable file range"); val expected = minOf(limit.toLong(), (file.size.toLong() - offset).coerceAtLeast(0L)); val readLength = minOf(limit.toLong(), if (file.local?.downloadedSize ?: 0 > 0) file.local.downloadedSize.toLong() else expected).toInt(); if (readLength <= 0) return ByteArray(0); return RandomAccessFile(File(path), "r").use { raf -> if (offset >= raf.length()) return@use ByteArray(0); raf.seek(offset.coerceAtMost(raf.length())); val out = ByteArray(minOf(readLength.toLong(), raf.length() - raf.filePointer).toInt()); var done = 0; while (done < out.size) { val n = raf.read(out, done, out.size - done); if (n <= 0) break; done += n }; if (done == out.size) out else out.copyOf(done) } }
     suspend fun downloadMessageFile(chatId: Long, messageId: Long): DownloadedFile { requireChat(chatId); val message = send(TdApi.GetMessage().apply { this.chatId = chatId; this.messageId = messageId }) as TdApi.Message; val payload = fileOf(message.content) ?: throw TdLibException(404, "That message no longer holds a file"); val done = send(TdApi.DownloadFile().apply { fileId = payload.first.id; priority = 16; offset = 0; limit = 0; synchronous = true }) as TdApi.File; val path = done.local?.path ?: throw TdLibException(500, "Telegram did not return the file"); val size = (if (done.size > 0) done.size else done.expectedSize).toLong(); return DownloadedFile(path, payload.second, size) }
     suspend fun editMessageDocument(chatId: Long, messageId: Long, localPath: String, caption: String) { val inputDocument = TdApi.InputDocument().apply { document = TdApi.InputFileLocal(localPath); thumbnail = null; disableContentTypeDetection = true }; val content = TdApi.InputMessageDocument().apply { document = inputDocument; this.caption = TdApi.FormattedText(caption, emptyArray()) }; send(TdApi.EditMessageMedia().apply { this.chatId = chatId; this.messageId = messageId; inputMessageContent = content }) }
     suspend fun pinMessage(chatId: Long, messageId: Long) { send(TdApi.PinChatMessage().apply { this.chatId = chatId; this.messageId = messageId; disableNotification = true; onlyForSelf = false }) }
