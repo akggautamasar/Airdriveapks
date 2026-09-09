@@ -17,17 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,8 +38,9 @@ import com.airdrive.backup.data.db.UploadStatus
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.telegram.TelegramRemoteInputStream
-import com.airdrive.backup.util.Format
+import com.airdrive.backup.telegram.TelegramRemoteMediaDataSource
 import com.airdrive.backup.ui.view.TelegramRemoteVideoView
+import com.airdrive.backup.util.Format
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -80,246 +71,126 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
     val context = LocalContext.current
     val dao = remember { AppDatabase.get(context).fileRecordDao() }
     val repository = remember { BackupRepository.get(context) }
-    val tdClient = remember { TdClient.get(context) }
+    val td = remember { TdClient.get(context) }
     var record by remember(recordId) { mutableStateOf<FileRecord?>(null) }
-    var localUri by remember(recordId) { mutableStateOf<Uri?>(null) }
+    var local by remember(recordId) { mutableStateOf<Uri?>(null) }
     var loading by remember(recordId) { mutableStateOf(true) }
     var restoring by remember(recordId) { mutableStateOf(false) }
     var error by remember(recordId) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
     LaunchedEffect(recordId) {
-        loading = true
-        record = withContext(Dispatchers.IO) {
-            dao.knownFiles().firstOrNull { it.id == recordId }?.let { dao.findByUri(it.uri) }
-        }
-        localUri = record?.let { findLocalUri(context, it) }
+        record = withContext(Dispatchers.IO) { dao.knownFiles().firstOrNull { it.id == recordId }?.let { dao.findByUri(it.uri) } }
+        local = record?.let { findLocalUri(context, it) }
         loading = false
     }
-
     BackHandler { nav.popBackStack() }
     Scaffold(containerColor = Page) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             TopAppBar(
-                title = {
-                    Column {
-                        Text(record?.displayName ?: "File", maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                        record?.let { Text("${categoryLabel(it.category)} • ${Format.bytes(it.sizeBytes)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    }
-                },
+                title = { Column { Text(record?.displayName ?: "File", maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold); record?.let { Text("${categoryLabel(it.category)} • ${Format.bytes(it.sizeBytes)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } } },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
-                actions = {
-                    IconButton(onClick = {}) { Icon(Icons.Default.Share, "Share") }
-                    IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "More") }
-                }
+                actions = { IconButton(onClick = {}) { Icon(Icons.Default.Share, "Share") }; IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "More") } }
             )
             when {
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) }
-                record == null -> CenterMessage("File unavailable", "This file record could not be loaded from the local AirDrive index.")
-                localUri != null -> LocalFileViewer(localUri!!, record!!)
-                canStream(record!!) -> CloudFileViewer(tdClient, record!!, onError = { error = it })
+                record == null -> CenterMessage("File unavailable", "The AirDrive file record could not be loaded.")
+                local != null -> LocalViewer(local!!, record!!)
+                canStream(record!!) -> CloudViewer(td, record!!, { error = it })
                 else -> CloudUnavailable(record!!, restoring, error) {
-                    restoring = true
-                    error = null
-                    scope.launch {
-                        runCatching { repository.restoreFile(record!!) }
-                            .onSuccess { localUri = Uri.fromFile(it) }
-                            .onFailure { error = it.message ?: "Restore failed" }
-                        restoring = false
-                    }
+                    restoring = true; error = null
+                    scope.launch { runCatching { repository.restoreFile(record!!) }.onSuccess { local = Uri.fromFile(it) }.onFailure { error = it.message ?: "Restore failed" }; restoring = false }
                 }
             }
         }
     }
 }
 
-private fun canStream(record: FileRecord): Boolean =
-    record.status == UploadStatus.UPLOADED && record.telegramMessageId != null && record.destinationChannelId != 0L
+private fun canStream(r: FileRecord) = r.status == UploadStatus.UPLOADED && r.telegramMessageId != null && r.destinationChannelId != 0L
 
-@Composable
-private fun LocalFileViewer(uri: Uri, record: FileRecord) {
-    when (viewerType(record.displayName)) {
-        ViewerType.IMAGE -> ImageViewer(uri, record)
-        ViewerType.VIDEO -> VideoViewer(uri, record)
-        ViewerType.PDF -> PdfViewer(uri)
-        ViewerType.EPUB -> EpubViewer(uri)
-        ViewerType.AUDIO -> AudioViewer(uri, record.displayName)
-        ViewerType.TEXT -> TextFileViewer(uri, record.displayName)
-        ViewerType.OTHER -> OtherViewer(record)
-    }
+@Composable private fun LocalViewer(uri: Uri, r: FileRecord) = when (viewerType(r.displayName)) {
+    ViewerType.IMAGE -> ImageViewer(uri, r)
+    ViewerType.VIDEO -> VideoViewer(uri, r)
+    ViewerType.PDF -> PdfViewer(uri)
+    ViewerType.EPUB -> EpubViewer(uri)
+    ViewerType.AUDIO -> AudioViewer(uri, r.displayName)
+    ViewerType.TEXT -> TextViewer(uri, r.displayName)
+    ViewerType.OTHER -> OtherViewer(r)
 }
 
-@Composable
-private fun CloudFileViewer(tdClient: TdClient, record: FileRecord, onError: (String) -> Unit) {
-    val chatId = record.destinationChannelId
-    val messageId = record.telegramMessageId ?: return
-    val type = viewerType(record.displayName)
+@Composable private fun CloudViewer(td: TdClient, r: FileRecord, onError: (String) -> Unit) {
+    val chat = r.destinationChannelId; val msg = r.telegramMessageId ?: return
     Column(Modifier.fillMaxSize()) {
-        CloudStreamingBadge(type)
-        when (type) {
-            ViewerType.IMAGE -> RemoteImageViewer(tdClient, chatId, messageId, record.sizeBytes, record)
-            ViewerType.VIDEO -> RemoteVideoViewer(tdClient, chatId, messageId, record)
-            ViewerType.AUDIO -> RemoteAudioViewer(tdClient, chatId, messageId, record)
-            ViewerType.TEXT -> RemoteTextViewer(tdClient, chatId, messageId, record)
-            ViewerType.PDF -> RemotePdfViewer(tdClient, chatId, messageId, record, onError)
-            ViewerType.EPUB -> RemoteEpubViewer(tdClient, chatId, messageId, record, onError)
-            ViewerType.OTHER -> RemoteBinaryPreview(tdClient, chatId, messageId, record)
+        Row(Modifier.fillMaxWidth().background(Color(0xFFEFFAF5)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CheckCircle, null, tint = Green, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(8.dp)); Text(if (viewerType(r.displayName) == ViewerType.VIDEO || viewerType(r.displayName) == ViewerType.AUDIO) "Streaming from Telegram • no user download" else "Previewing from Telegram • no user download", color = Green, style = MaterialTheme.typography.labelMedium)
+        }
+        when (viewerType(r.displayName)) {
+            ViewerType.IMAGE -> RemoteImage(td, chat, msg, r)
+            ViewerType.VIDEO -> RemoteVideo(td, chat, msg, r)
+            ViewerType.AUDIO -> RemoteAudio(td, chat, msg, r)
+            ViewerType.TEXT -> RemoteText(td, chat, msg, r)
+            ViewerType.PDF -> RemotePdf(td, chat, msg, r, onError)
+            ViewerType.EPUB -> RemoteEpub(td, chat, msg, r, onError)
+            ViewerType.OTHER -> RemoteBinary(td, chat, msg, r)
         }
     }
 }
 
-@Composable private fun CloudStreamingBadge(type: ViewerType) {
-    Row(Modifier.fillMaxWidth().background(Color(0xFFEFFAF5)).padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.CheckCircle, null, tint = Green, modifier = Modifier.size(17.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(if (type == ViewerType.VIDEO || type == ViewerType.AUDIO) "Streaming from Telegram • no local download" else "Previewing from Telegram • no user download", color = Green, style = MaterialTheme.typography.labelMedium)
-    }
+@Composable private fun RemoteImage(td: TdClient, chat: Long, msg: Long, r: FileRecord) {
+    val bmp by produceState<Bitmap?>(null, chat, msg) { value = withContext(Dispatchers.IO) { runCatching { BitmapFactory.decodeStream(TelegramRemoteInputStream(td, chat, msg, r.sizeBytes)) }.getOrNull() } }
+    Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF101216)), contentAlignment = Alignment.Center) { if (bmp != null) Image(bmp!!.asImageBitmap(), null, Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit) else CircularProgressIndicator(color = Color.White) }
+    ViewerInfo(r, false)
 }
 
-@Composable private fun RemoteImageViewer(client: TdClient, chatId: Long, messageId: Long, size: Long, record: FileRecord) {
-    val bitmap by produceState<Bitmap?>(null, chatId, messageId) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { BitmapFactory.decodeStream(TelegramRemoteInputStream(client, chatId, messageId, size)) }.getOrNull()
-        }
+@Composable private fun RemoteVideo(td: TdClient, chat: Long, msg: Long, r: FileRecord) {
+    var view by remember { mutableStateOf<TelegramRemoteVideoView?>(null) }; var playing by remember { mutableStateOf(true) }
+    Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
+        AndroidView(factory = { c -> TelegramRemoteVideoView(c, td, chat, msg, r.sizeBytes).also { view = it } }, modifier = Modifier.fillMaxSize())
+        Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp), shape = CircleShape, color = Color.Black.copy(alpha = .65f)) { IconButton(onClick = { view?.togglePlay(); playing = !playing }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White) } }
     }
-    Column(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF101216)), contentAlignment = Alignment.Center) {
-            if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit)
-            else CircularProgressIndicator(color = Color.White)
-        }
-        ViewerInfo(record, false)
-    }
+    ViewerInfo(r, false, true)
 }
 
-@Composable private fun RemoteVideoViewer(client: TdClient, chatId: Long, messageId: Long, record: FileRecord) {
-    var player by remember { mutableStateOf<TelegramRemoteVideoView?>(null) }
-    var playing by remember { mutableStateOf(true) }
-    Column(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-            AndroidView(
-                factory = { context -> TelegramRemoteVideoView(context, client, chatId, messageId, record.sizeBytes).also { player = it } },
-                modifier = Modifier.fillMaxSize()
-            )
-            Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp), CircleShape, color = Color.Black.copy(alpha = .65f)) {
-                IconButton(onClick = { player?.togglePlay(); playing = !playing }) {
-                    Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White)
-                }
-            }
-        }
-        ViewerInfo(record, false, true)
-    }
+@Composable private fun RemoteAudio(td: TdClient, chat: Long, msg: Long, r: FileRecord) {
+    var player by remember { mutableStateOf<MediaPlayer?>(null) }; var ready by remember { mutableStateOf(false) }; var playing by remember { mutableStateOf(false) }; var pos by remember { mutableLongStateOf(0L) }; var duration by remember { mutableLongStateOf(0L) }
+    DisposableEffect(chat, msg) { val mp = MediaPlayer(); runCatching { mp.setDataSource(TelegramRemoteMediaDataSource(td, chat, msg, r.sizeBytes)); mp.setOnPreparedListener { duration = it.duration.toLong(); ready = true; player = it }; mp.setOnCompletionListener { playing = false }; mp.prepareAsync() }; onDispose { mp.release(); player = null } }
+    LaunchedEffect(player, playing) { while (playing && player != null) { pos = player!!.currentPosition.toLong(); delay(400) } }
+    Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Spacer(Modifier.height(24.dp)); Surface(modifier = Modifier.size(170.dp), shape = RoundedCornerShape(40.dp), color = Color(0xFFF0EBFF)) { Box(contentAlignment = Alignment.Center) { Text("AUDIO", color = Purple, fontWeight = FontWeight.Bold) } }; Spacer(Modifier.height(18.dp)); Text(r.displayName, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center); Spacer(Modifier.height(22.dp)); LinearProgressIndicator(progress = { if (duration > 0) pos.toFloat() / duration else 0f }, modifier = Modifier.fillMaxWidth()); Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(formatTime(pos)); Text(formatTime(duration)) }; Spacer(Modifier.height(20.dp)); Surface(modifier = Modifier.size(72.dp), shape = CircleShape, color = Purple) { IconButton(enabled = ready, onClick = { player?.let { if (it.isPlaying) { it.pause(); playing = false } else { it.start(); playing = true } } }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White) } } }
 }
 
-@Composable private fun RemoteAudioViewer(client: TdClient, chatId: Long, messageId: Long, record: FileRecord) {
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    var prepared by remember { mutableStateOf(false) }
-    var playing by remember { mutableStateOf(false) }
-    var position by remember { mutableLongStateOf(0L) }
-    var duration by remember { mutableLongStateOf(0L) }
-    DisposableEffect(chatId, messageId) {
-        val mp = MediaPlayer()
-        runCatching {
-            mp.setDataSource(com.airdrive.backup.telegram.TelegramRemoteMediaDataSource(client, chatId, messageId, record.sizeBytes))
-            mp.setOnPreparedListener { duration = it.duration.toLong(); prepared = true; player = it }
-            mp.setOnCompletionListener { playing = false; position = duration }
-            mp.prepareAsync()
-        }.onFailure { }
-        onDispose { mp.release(); player = null }
-    }
-    LaunchedEffect(player, playing) { while (playing && player != null) { position = player!!.currentPosition.toLong(); delay(400) } }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(28.dp))
-        Surface(Modifier.size(180.dp), RoundedCornerShape(42.dp), color = Color(0xFFF0EBFF)) { Box(contentAlignment = Alignment.Center) { Text("AUDIO", color = Purple, fontWeight = FontWeight.Bold) } }
-        Spacer(Modifier.height(20.dp)); Text(record.displayName, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(24.dp)); LinearProgressIndicator(progress = { if (duration > 0) position.toFloat() / duration else 0f }, modifier = Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(formatTime(position)); Text(formatTime(duration)) }
-        Spacer(Modifier.height(22.dp))
-        Surface(Modifier.size(72.dp), CircleShape, color = Purple) {
-            IconButton(enabled = prepared, onClick = { player?.let { if (it.isPlaying) { it.pause(); playing = false } else { it.start(); playing = true } } }) {
-                Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp))
-            }
-        }
-    }
+@Composable private fun RemoteText(td: TdClient, chat: Long, msg: Long, r: FileRecord) {
+    val text by produceState<String?>(null, chat, msg) { value = withContext(Dispatchers.IO) { runCatching { TelegramRemoteInputStream(td, chat, msg, r.sizeBytes).use { readLimited(it, 256 * 1024) }.toString(Charsets.UTF_8) }.getOrNull() } }
+    if (text == null) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) { Text(text!!, style = MaterialTheme.typography.bodySmall) }
 }
 
-@Composable private fun RemoteTextViewer(client: TdClient, chatId: Long, messageId: Long, record: FileRecord) {
-    val text by produceState<String?>(null, chatId, messageId) {
-        value = withContext(Dispatchers.IO) { runCatching { TelegramRemoteInputStream(client, chatId, messageId, record.sizeBytes).use { it.readBytesLimited(256 * 1024) }.toString(Charsets.UTF_8) }.getOrNull() }
-    }
-    if (text == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) }
-    else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { Text(text!!, style = MaterialTheme.typography.bodySmall) }
-}
+private fun readLimited(input: java.io.InputStream, max: Int): ByteArray { val out = java.io.ByteArrayOutputStream(); val b = ByteArray(8192); var total = 0; while (total < max) { val n = input.read(b, 0, minOf(b.size, max - total)); if (n <= 0) break; out.write(b, 0, n); total += n }; return out.toByteArray() }
 
-private fun java.io.InputStream.readBytesLimited(max: Int): ByteArray {
-    val out = java.io.ByteArrayOutputStream()
-    val buffer = ByteArray(8192)
-    var total = 0
-    while (total < max) {
-        val n = read(buffer, 0, minOf(buffer.size, max - total))
-        if (n <= 0) break
-        out.write(buffer, 0, n); total += n
-    }
-    return out.toByteArray()
-}
+@Composable private fun RemotePdf(td: TdClient, chat: Long, msg: Long, r: FileRecord, onError: (String) -> Unit) { RemoteTransientFile(td, chat, msg, r, "pdf_${r.id}.pdf", onError) { PdfViewer(Uri.fromFile(it)) } }
+@Composable private fun RemoteEpub(td: TdClient, chat: Long, msg: Long, r: FileRecord, onError: (String) -> Unit) { RemoteTransientFile(td, chat, msg, r, "epub_${r.id}.epub", onError) { EpubViewer(Uri.fromFile(it)) } }
 
-@Composable private fun RemotePdfViewer(client: TdClient, chatId: Long, messageId: Long, record: FileRecord, onError: (String) -> Unit) {
-    val context = LocalContext.current
-    var file by remember { mutableStateOf<File?>(null) }
-    LaunchedEffect(chatId, messageId) { runCatching { file = materializeTransient(context, client, chatId, messageId, record.sizeBytes, "pdf_${record.id}.pdf") }.onFailure { onError(it.message ?: "Unable to preview PDF") } }
-    if (file == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) }
-    else PdfViewer(Uri.fromFile(file))
+@Composable private fun RemoteTransientFile(td: TdClient, chat: Long, msg: Long, r: FileRecord, name: String, onError: (String) -> Unit, content: @Composable (File) -> Unit) {
+    val context = LocalContext.current; var file by remember { mutableStateOf<File?>(null) }
+    LaunchedEffect(chat, msg) { runCatching { file = materializeTransient(context, td, chat, msg, r.sizeBytes, name) }.onFailure { onError(it.message ?: "Preview failed") } }
+    if (file == null) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else content(file!!)
     DisposableEffect(file) { onDispose { file?.delete() } }
 }
 
-@Composable private fun RemoteEpubViewer(client: TdClient, chatId: Long, messageId: Long, record: FileRecord, onError: (String) -> Unit) {
-    val context = LocalContext.current
-    var file by remember { mutableStateOf<File?>(null) }
-    LaunchedEffect(chatId, messageId) { runCatching { file = materializeTransient(context, client, chatId, messageId, record.sizeBytes, "epub_${record.id}.epub") }.onFailure { onError(it.message ?: "Unable to preview EPUB") } }
-    if (file == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) }
-    else EpubViewer(Uri.fromFile(file))
-    DisposableEffect(file) { onDispose { file?.delete() } }
+private suspend fun materializeTransient(context: android.content.Context, td: TdClient, chat: Long, msg: Long, size: Long, name: String): File = withContext(Dispatchers.IO) { val target = File(context.cacheDir, "airdrive_preview_$name"); FileOutputStream(target).use { out -> var offset = 0L; while (offset < size) { val chunk = td.downloadFileRange(chat, msg, offset, minOf(1024 * 1024L, size - offset).toInt()); if (chunk.isEmpty()) break; out.write(chunk); offset += chunk.size }; if (offset < size) throw IllegalStateException("Preview stream ended early") }; target }
+
+@Composable private fun RemoteBinary(td: TdClient, chat: Long, msg: Long, r: FileRecord) {
+    val bytes by produceState<ByteArray?>(null, chat, msg) { value = withContext(Dispatchers.IO) { runCatching { td.downloadFileRange(chat, msg, 0L, minOf(32 * 1024L, r.sizeBytes.coerceAtLeast(1L)).toInt()) }.getOrNull() } }
+    Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Spacer(Modifier.height(24.dp)); Text(r.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center); Spacer(Modifier.height(8.dp)); Text("${Format.bytes(r.sizeBytes)} • cloud preview", color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.height(20.dp)); Surface(Modifier.fillMaxWidth(), RoundedCornerShape(18.dp), color = Color.White) { Column(Modifier.padding(16.dp)) { Text("First bytes", fontWeight = FontWeight.Bold); Spacer(Modifier.height(8.dp)); Text(bytes?.joinToString(" ") { "%02X".format(it) } ?: "Reading from Telegram…", style = MaterialTheme.typography.bodySmall) } } }
 }
 
-private suspend fun materializeTransient(context: android.content.Context, client: TdClient, chatId: Long, messageId: Long, size: Long, name: String): File = withContext(Dispatchers.IO) {
-    val target = File(context.cacheDir, "airdrive_preview_$name")
-    FileOutputStream(target).use { output ->
-        var offset = 0L
-        while (offset < size) {
-            val request = minOf(1024 * 1024, size - offset).toInt()
-            val chunk = client.downloadFileRange(chatId, messageId, offset, request)
-            if (chunk.isEmpty()) break
-            output.write(chunk); offset += chunk.size
-        }
-        if (offset < size) throw IllegalStateException("Preview stream ended early")
-    }
-    target
-}
-
-@Composable private fun RemoteBinaryPreview(client: TdClient, chatId: Long, messageId: Long, record: FileRecord) {
-    val bytes by produceState<ByteArray?>(null, chatId, messageId) { value = withContext(Dispatchers.IO) { runCatching { client.downloadFileRange(chatId, messageId, 0L, minOf(32 * 1024, record.sizeBytes.coerceAtLeast(1L)).toInt()) }.getOrNull() } }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(Modifier.height(20.dp)); Text(record.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(8.dp)); Text("${Format.bytes(record.sizeBytes)} • cloud preview", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(22.dp)); Surface(Modifier.fillMaxWidth(), RoundedCornerShape(18.dp), color = Color.White) {
-            Column(Modifier.padding(16.dp)) { Text("File preview", fontWeight = FontWeight.Bold); Spacer(Modifier.height(8.dp)); Text(if (bytes == null) "Reading the first bytes from Telegram…" else bytes!!.joinToString(" ") { "%02X".format(it) }, style = MaterialTheme.typography.bodySmall) }
-        }
-        Spacer(Modifier.height(14.dp)); Text("This file is not copied to your Downloads folder. AirDrive reads only the data needed for the preview.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable private fun ImageViewer(uri: Uri, record: FileRecord) { val context = LocalContext.current; val bitmap by produceState<Bitmap?>(null, uri) { value = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) }.getOrNull() } }; Column(Modifier.fillMaxSize()) { Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF101216)), contentAlignment = Alignment.Center) { if (bitmap != null) Image(bitmap!!.asImageBitmap(), null, Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit) else CircularProgressIndicator(color = Color.White) }; ViewerInfo(record, record.status == UploadStatus.PENDING) } }
-@Composable private fun VideoViewer(uri: Uri, record: FileRecord) { Column(Modifier.fillMaxSize()) { Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { AndroidView(factory = { context -> VideoView(context).apply { setVideoURI(uri); setMediaController(MediaController(context)); setOnPreparedListener { start() } } }, modifier = Modifier.fillMaxSize()) }; ViewerInfo(record, record.status == UploadStatus.PENDING, true) } }
-@Composable private fun ViewerInfo(record: FileRecord, showUpload: Boolean, video: Boolean = false) { Column(Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 18.dp, vertical = 13.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Surface(modifier = Modifier.size(30.dp), shape = CircleShape, color = if (record.status == UploadStatus.UPLOADED) Color(0xFFE8F8F0) else Color(0xFFFFF5DF)) { Box(contentAlignment = Alignment.Center) { Icon(if (record.status == UploadStatus.UPLOADED) Icons.Default.CheckCircle else Icons.Default.Upload, null, tint = if (record.status == UploadStatus.UPLOADED) Green else Orange, modifier = Modifier.size(19.dp)) } }; Spacer(Modifier.width(9.dp)); Column(Modifier.weight(1f)) { Text(record.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold); Text(if (record.status == UploadStatus.UPLOADED) "Backed up to Telegram" else "Pending upload", style = MaterialTheme.typography.labelSmall, color = if (record.status == UploadStatus.UPLOADED) Green else Orange) } }; Spacer(Modifier.height(8.dp)); DetailLine(Icons.Default.Download, Format.bytes(record.sizeBytes)); DetailLine(Icons.Default.CalendarMonth, "${record.modifiedAtMillis}"); DetailLine(Icons.Default.Folder, record.uri.substringAfterLast("/", record.uri)); Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { ViewerAction("Share", Icons.Default.Share, Modifier.weight(1f)) {}; ViewerAction(if (showUpload) "Upload now" else "Download", if (showUpload) Icons.Default.Upload else Icons.Default.Download, Modifier.weight(1f)) {}; ViewerAction(if (video) "Play" else "Preview", Icons.Default.PlayArrow, Modifier.weight(1f)) {}; ViewerAction("More", Icons.Default.MoreVert, Modifier.weight(1f)) {} } } }
-@Composable private fun DetailLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) { Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(10.dp)); Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
-@Composable private fun ViewerAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier, onClick: () -> Unit) { OutlinedButton(onClick = onClick, modifier = modifier.height(50.dp), shape = RoundedCornerShape(13.dp), contentPadding = PaddingValues(horizontal = 4.dp)) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(icon, null, modifier = Modifier.size(18.dp)); Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1) } } }
-@Composable private fun CloudUnavailable(record: FileRecord, restoring: Boolean, error: String?, onDownload: () -> Unit) { Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Surface(modifier = Modifier.size(104.dp), shape = RoundedCornerShape(28.dp), color = Color(0xFFEAF2FF)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Download, null, tint = Color(0xFF2F6FEA), modifier = Modifier.size(46.dp)) } }; Spacer(Modifier.height(18.dp)); Text("Cloud copy ready", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Spacer(Modifier.height(6.dp)); Text("This upload does not have enough Telegram metadata for live preview. You can restore it only when you explicitly choose to download it.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.height(18.dp)); Button(enabled = !restoring && record.status == UploadStatus.UPLOADED && record.telegramMessageId != null, onClick = onDownload, colors = ButtonDefaults.buttonColors(containerColor = Purple)) { if (restoring) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null); Spacer(Modifier.width(8.dp)); Text(if (restoring) "Restoring…" else "Download & Open") }; if (error != null) { Spacer(Modifier.height(12.dp)); Text(error, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) } } }
-@Composable private fun PdfViewer(uri: Uri) { val context = LocalContext.current; var pageBitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }; var pageCount by remember(uri) { mutableIntStateOf(0) }; var pageIndex by remember(uri) { mutableIntStateOf(0) }; var error by remember(uri) { mutableStateOf<String?>(null) }; LaunchedEffect(uri, pageIndex) { withContext(Dispatchers.IO) { runCatching { val file = copyToCache(context, uri, "pdf_${uri.hashCode()}.pdf"); val descriptor = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY); val renderer = android.graphics.pdf.PdfRenderer(descriptor); pageCount = renderer.pageCount; if (pageCount > 0) { val page = renderer.openPage(pageIndex.coerceIn(0, pageCount - 1)); val bitmap = Bitmap.createBitmap(page.width * 2, page.height * 2, Bitmap.Config.ARGB_8888); bitmap.eraseColor(android.graphics.Color.WHITE); page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY); page.close(); renderer.close(); descriptor.close(); pageBitmap = bitmap } else { renderer.close(); descriptor.close() } }.onFailure { error = it.message ?: "Unable to render PDF" } } }; if (error != null) CenterMessage("PDF preview unavailable", error!!) else Column(Modifier.fillMaxSize()) { Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("Page ${pageIndex + 1} of ${pageCount.coerceAtLeast(1)}", fontWeight = FontWeight.SemiBold); Row { TextButton(enabled = pageIndex > 0, onClick = { pageIndex-- }) { Text("Previous") }; TextButton(enabled = pageIndex + 1 < pageCount, onClick = { pageIndex++ }) { Text("Next") } } }; Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).background(Color(0xFFE8EBF0)), contentAlignment = Alignment.TopCenter) { if (pageBitmap != null) Image(pageBitmap!!.asImageBitmap(), "PDF page", Modifier.fillMaxWidth().padding(12.dp), contentScale = ContentScale.FillWidth) else CircularProgressIndicator(Modifier.align(Alignment.Center)) } } }
-@Composable private fun EpubViewer(uri: Uri) { val context = LocalContext.current; var html by remember(uri) { mutableStateOf<String?>(null) }; var error by remember(uri) { mutableStateOf<String?>(null) }; LaunchedEffect(uri) { withContext(Dispatchers.IO) { runCatching { val epub = copyToCache(context, uri, "book_${uri.hashCode()}.epub"); ZipFile(epub).use { zip -> val entry = zip.entries().asSequence().firstOrNull { !it.isDirectory && (it.name.endsWith(".xhtml", true) || it.name.endsWith(".html", true) || it.name.endsWith(".htm", true)) } ?: error("No readable EPUB chapter found"); html = zip.getInputStream(entry).bufferedReader().use { it.readText() } } }.onFailure { error = it.message ?: "Unable to open EPUB" } } }; if (error != null) CenterMessage("EPUB preview unavailable", error!!) else if (html == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else AndroidView(factory = { context -> WebView(context).apply { settings.javaScriptEnabled = false; settings.allowFileAccess = false; webViewClient = WebViewClient() } }, modifier = Modifier.fillMaxSize(), update = { it.loadDataWithBaseURL("https://airdrive.local/", html!!, "application/xhtml+xml", "UTF-8", null) }) }
-@Composable private fun TextFileViewer(uri: Uri, name: String) { val context = LocalContext.current; val text by produceState<String?>(null, uri) { value = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytesLimited(256 * 1024).toString(Charsets.UTF_8) } }.getOrNull() } }; if (text == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) { Text(name, fontWeight = FontWeight.Bold); Spacer(Modifier.height(12.dp)); Text(text!!) } }
-@Composable private fun AudioViewer(uri: Uri, name: String) { val context = LocalContext.current; var player by remember(uri) { mutableStateOf<MediaPlayer?>(null) }; var playing by remember(uri) { mutableStateOf(false) }; var position by remember(uri) { mutableLongStateOf(0L) }; var duration by remember(uri) { mutableLongStateOf(0L) }; DisposableEffect(uri) { val mp = MediaPlayer().apply { setDataSource(context, uri); setOnPreparedListener { duration = it.duration.toLong(); player = it }; setOnCompletionListener { playing = false; position = duration }; prepareAsync() }; onDispose { mp.release(); player = null } }; LaunchedEffect(player, playing) { while (playing && player != null) { position = player!!.currentPosition.toLong(); delay(400) } }; Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Spacer(Modifier.height(28.dp)); Surface(modifier = Modifier.size(180.dp), shape = RoundedCornerShape(42.dp), color = Color(0xFFF0EBFF)) { Box(contentAlignment = Alignment.Center) { Text("AUDIO", color = Purple, fontWeight = FontWeight.Bold) } }; Spacer(Modifier.height(20.dp)); Text(name, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center); Spacer(Modifier.height(24.dp)); LinearProgressIndicator(progress = { if (duration > 0) position.toFloat() / duration else 0f }, modifier = Modifier.fillMaxWidth()); Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(formatTime(position)); Text(formatTime(duration)) }; Spacer(Modifier.height(22.dp)); Surface(modifier = Modifier.size(72.dp), shape = CircleShape, color = Purple) { IconButton(enabled = player != null, onClick = { player?.let { if (it.isPlaying) { it.pause(); playing = false } else { it.start(); playing = true } } }) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp)) } } } }
-@Composable private fun OtherViewer(record: FileRecord) { CenterMessage("No built-in preview for this type", "${record.displayName.substringAfterLast('.', "FILE").uppercase()} files can still be previewed as a cloud byte sample or restored explicitly when a native viewer is required.") }
-@Composable private fun CenterMessage(title: String, detail: String) { Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.ErrorOutline, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(44.dp)); Spacer(Modifier.height(12.dp)); Text(title, fontWeight = FontWeight.Bold); Spacer(Modifier.height(6.dp)); Text(detail, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
-private fun findLocalUri(context: android.content.Context, record: FileRecord): Uri? { val uri = Uri.parse(record.uri); if (uri.scheme.equals("file", true)) return uri.takeIf { it.path?.let(::File)?.isFile == true }; if (uri.scheme.equals("content", true)) return runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { uri } }.getOrNull(); return null }
-private suspend fun copyToCache(context: android.content.Context, uri: Uri, name: String): File = withContext(Dispatchers.IO) { val target = File(context.cacheDir, "viewer_$name"); context.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(target).use { input.copyTo(it) } } ?: throw IllegalStateException("Cannot read file"); target }
-private fun java.io.InputStream.readBytesLimited(max: Int): ByteArray { val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192); var total = 0; while (total < max) { val n = read(buffer, 0, minOf(buffer.size, max - total)); if (n <= 0) break; out.write(buffer, 0, n); total += n }; return out.toByteArray() }
-private fun formatTime(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return "%d:%02d".format(seconds / 60, seconds % 60) }
+@Composable private fun ImageViewer(uri: Uri, r: FileRecord) { val context = LocalContext.current; val bmp by produceState<Bitmap?>(null, uri) { value = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) }.getOrNull() } }; Box(Modifier.fillMaxWidth().weight(1f).background(Color(0xFF101216)), contentAlignment = Alignment.Center) { if (bmp != null) Image(bmp!!.asImageBitmap(), null, Modifier.fillMaxSize().padding(6.dp), contentScale = ContentScale.Fit) else CircularProgressIndicator(color = Color.White) }; ViewerInfo(r, r.status == UploadStatus.PENDING) }
+@Composable private fun VideoViewer(uri: Uri, r: FileRecord) { Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { AndroidView(factory = { c -> VideoView(c).apply { setVideoURI(uri); setMediaController(MediaController(c)); setOnPreparedListener { start() } } }, modifier = Modifier.fillMaxSize()) }; ViewerInfo(r, r.status == UploadStatus.PENDING, true) }
+@Composable private fun AudioViewer(uri: Uri, name: String) { val context = LocalContext.current; var p by remember(uri) { mutableStateOf<MediaPlayer?>(null) }; var playing by remember(uri) { mutableStateOf(false) }; var duration by remember(uri) { mutableLongStateOf(0L) }; var pos by remember(uri) { mutableLongStateOf(0L) }; DisposableEffect(uri) { val mp = MediaPlayer().apply { setDataSource(context, uri); setOnPreparedListener { duration = it.duration.toLong(); p = it }; setOnCompletionListener { playing = false } ; prepareAsync() }; onDispose { mp.release(); p = null } }; LaunchedEffect(p, playing) { while (playing && p != null) { pos = p!!.currentPosition.toLong(); delay(400) } }; Column(Modifier.fillMaxWidth().weight(1f).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Spacer(Modifier.height(40.dp)); Text(name, fontWeight = FontWeight.Bold); Spacer(Modifier.height(20.dp)); LinearProgressIndicator(progress = { if (duration > 0) pos.toFloat() / duration else 0f }, modifier = Modifier.fillMaxWidth()); Spacer(Modifier.height(20.dp)); Button(enabled = p != null, onClick = { p?.let { if (it.isPlaying) { it.pause(); playing = false } else { it.start(); playing = true } } }) { Text(if (playing) "Pause" else "Play") } } }
+@Composable private fun TextViewer(uri: Uri, name: String) { val context = LocalContext.current; val text by produceState<String?>(null, uri) { value = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(uri)?.use { readLimited(it, 256 * 1024).toString(Charsets.UTF_8) } }.getOrNull() } }; if (text == null) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) { Text(name, fontWeight = FontWeight.Bold); Spacer(Modifier.height(12.dp)); Text(text!!) } }
+@Composable private fun PdfViewer(uri: Uri) { val context = LocalContext.current; var bmp by remember(uri) { mutableStateOf<Bitmap?>(null) }; var pages by remember(uri) { mutableIntStateOf(0) }; var page by remember(uri) { mutableIntStateOf(0) }; var error by remember(uri) { mutableStateOf<String?>(null) }; LaunchedEffect(uri, page) { withContext(Dispatchers.IO) { runCatching { val f = copyToCache(context, uri, "pdf_${uri.hashCode()}.pdf"); val d = android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY); val r = android.graphics.pdf.PdfRenderer(d); pages = r.pageCount; if (pages > 0) { val p = r.openPage(page.coerceIn(0, pages - 1)); val b = Bitmap.createBitmap(p.width * 2, p.height * 2, Bitmap.Config.ARGB_8888); b.eraseColor(android.graphics.Color.WHITE); p.render(b, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY); p.close(); r.close(); d.close(); bmp = b } }.onFailure { error = it.message ?: "Unable to render PDF" } } }; if (error != null) CenterMessage("PDF preview unavailable", error!!) else Column(Modifier.fillMaxWidth().weight(1f)) { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text("Page ${page + 1} of ${pages.coerceAtLeast(1)}"); Row { TextButton(enabled = page > 0, onClick = { page-- }) { Text("Previous") }; TextButton(enabled = page + 1 < pages, onClick = { page++ }) { Text("Next") } } }; Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) { bmp?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxWidth().padding(12.dp)) } ?: CircularProgressIndicator() } } }
+@Composable private fun EpubViewer(uri: Uri) { val context = LocalContext.current; var html by remember(uri) { mutableStateOf<String?>(null) }; var error by remember(uri) { mutableStateOf<String?>(null) }; LaunchedEffect(uri) { withContext(Dispatchers.IO) { runCatching { val f = copyToCache(context, uri, "epub_${uri.hashCode()}.epub"); ZipFile(f).use { z -> val e = z.entries().asSequence().firstOrNull { !it.isDirectory && (it.name.endsWith(".xhtml", true) || it.name.endsWith(".html", true) || it.name.endsWith(".htm", true)) } ?: error("No readable EPUB chapter found"); html = z.getInputStream(e).bufferedReader().use { it.readText() } } }.onFailure { error = it.message ?: "Unable to open EPUB" } } }; if (error != null) CenterMessage("EPUB preview unavailable", error!!) else if (html == null) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } else AndroidView(factory = { c -> WebView(c).apply { settings.javaScriptEnabled = false; settings.allowFileAccess = false; webViewClient = WebViewClient() } }, update = { it.loadDataWithBaseURL("https://airdrive.local/", html!!, "application/xhtml+xml", "UTF-8", null) }, modifier = Modifier.fillMaxWidth().weight(1f)) }
+@Composable private fun ViewerInfo(r: FileRecord, showUpload: Boolean, video: Boolean = false) { Column(Modifier.fillMaxWidth().background(Color.White).padding(16.dp)) { Text(r.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold); Text(if (r.status == UploadStatus.UPLOADED) "Backed up to Telegram" else "Pending upload", style = MaterialTheme.typography.labelSmall, color = if (r.status == UploadStatus.UPLOADED) Green else Orange); Spacer(Modifier.height(8.dp)); Text(Format.bytes(r.sizeBytes), style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = {}, modifier = Modifier.weight(1f)) { Text("Share") }; OutlinedButton(onClick = {}, modifier = Modifier.weight(1f)) { Text(if (showUpload) "Upload now" else "Download") }; OutlinedButton(onClick = {}, modifier = Modifier.weight(1f)) { Text(if (video) "Play" else "Preview") } } } }
+@Composable private fun CloudUnavailable(r: FileRecord, restoring: Boolean, error: String?, onRestore: () -> Unit) { Column(Modifier.fillMaxWidth().weight(1f).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Icon(Icons.Default.CloudOff, null, modifier = Modifier.size(48.dp), tint = Purple); Spacer(Modifier.height(14.dp)); Text("Cloud copy ready", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Spacer(Modifier.height(8.dp)); Text("This file is uploaded but its Telegram destination metadata is incomplete, so live preview is unavailable.", textAlign = TextAlign.Center); Spacer(Modifier.height(18.dp)); Button(enabled = !restoring, onClick = onRestore) { if (restoring) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null); Spacer(Modifier.width(8.dp)); Text(if (restoring) "Restoring…" else "Download & Open") }; error?.let { Spacer(Modifier.height(12.dp)); Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center) } } }
+@Composable private fun OtherViewer(r: FileRecord) { CenterMessage("Preview available as cloud data", "${r.displayName.substringAfterLast('.', "FILE").uppercase()} files can be inspected without putting a copy in Downloads. Restore only when another native app is required.") }
+@Composable private fun CenterMessage(title: String, detail: String) { Box(Modifier.fillMaxWidth().weight(1f).padding(24.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(42.dp), tint = MaterialTheme.colorScheme.error); Spacer(Modifier.height(12.dp)); Text(title, fontWeight = FontWeight.Bold); Spacer(Modifier.height(6.dp)); Text(detail, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+private fun findLocalUri(context: android.content.Context, r: FileRecord): Uri? { val u = Uri.parse(r.uri); if (u.scheme.equals("file", true)) return u.takeIf { it.path?.let(::File)?.isFile == true }; if (u.scheme.equals("content", true)) return runCatching { context.contentResolver.openAssetFileDescriptor(u, "r")?.use { u } }.getOrNull(); return null }
+private suspend fun copyToCache(context: android.content.Context, uri: Uri, name: String): File = withContext(Dispatchers.IO) { val f = File(context.cacheDir, "viewer_$name"); context.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(f).use { input.copyTo(it) } } ?: throw IllegalStateException("Cannot read file"); f }
+private fun formatTime(ms: Long): String { val s = (ms / 1000).coerceAtLeast(0); return "%d:%02d".format(s / 60, s % 60) }
