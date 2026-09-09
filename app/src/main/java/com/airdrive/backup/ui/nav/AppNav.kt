@@ -113,8 +113,8 @@ fun AppNav(deepLinkRoute: String? = null) {
     LaunchedEffect(resolved, deepLinkRoute) { if (deepLinkRoute != null && deepLinkRoute != resolved && resolved == Routes.DASHBOARD) runCatching { navController.navigate(deepLinkRoute) } }
 
     val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
-    val showBottomBar = currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER || currentRoute?.startsWith(Routes.GALLERY) == true || bottomTabs.any { it.route == currentRoute }
-    val selectedTabRoute = if (currentRoute == Routes.BACKUP_PROGRESS || currentRoute == Routes.FILE_VIEWER || currentRoute?.startsWith(Routes.GALLERY) == true) Routes.CATEGORIES_STATS else currentRoute
+    val showBottomBar = currentRoute == Routes.BACKUP_PROGRESS || currentRoute?.startsWith(Routes.GALLERY) == true || bottomTabs.any { it.route == currentRoute }
+    val selectedTabRoute = if (currentRoute == Routes.BACKUP_PROGRESS || currentRoute?.startsWith(Routes.GALLERY) == true || currentRoute == Routes.FILE_VIEWER) Routes.CATEGORIES_STATS else currentRoute
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background, bottomBar = {
         if (showBottomBar) NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
