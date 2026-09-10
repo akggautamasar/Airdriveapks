@@ -1,0 +1,35 @@
+name: Integrate Files Hub Actions
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/patch-fileshub2.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Integrate reusable actions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('app/src/main/java/com/airdrive/backup/ui/screens/FilesHubScreen.kt')
+          s=p.read_text()
+          marker='import com.airdrive.backup.util.Format\n'
+          if 'import com.airdrive.backup.ui.screens.FilesHubActions' not in s:
+              s=s.replace(marker, marker+'import com.airdrive.backup.ui.screens.FilesHubActions\n')
+          start=s.index('@Composable private fun FileRow(')
+          end=s.index('@Composable private fun Preview', start)
+          old=s[start:end]
+          new='''@Composable private fun FileRow(record: FileRecord, nav: NavHostController) {\n    val tint = categoryTint(record.category)\n    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {\n        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {\n            Preview(record, tint)\n            Spacer(Modifier.width(11.dp))\n            Column(Modifier.weight(1f).clickable { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") }) {\n                Text(record.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)\n                Text("${Format.bytes(record.sizeBytes)} • ${record.category.name.lowercase(Locale.getDefault()).replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)\n                Row(verticalAlignment = Alignment.CenterVertically) {\n                    Icon(if (record.status == UploadStatus.UPLOADED) Icons.Default.CheckCircle else Icons.Default.Schedule, null, tint = if (record.status == UploadStatus.UPLOADED) Green else Orange, modifier = Modifier.size(14.dp))\n                    Spacer(Modifier.width(4.dp))\n                    Text(if (record.status == UploadStatus.UPLOADED) "Backed up to Telegram" else "Pending upload", style = MaterialTheme.typography.labelSmall, color = if (record.status == UploadStatus.UPLOADED) Green else Orange)\n                }\n            }\n            FilesHubActions(record, nav)\n        }\n    }\n}\n\n'''
+          s=s[:start]+new+s[end:]
+          p.write_text(s)
+          PY
+      - name: Commit integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/airdrive/backup/ui/screens/FilesHubScreen.kt
+          git commit -m 'feat: wire Files Hub actions' || exit 0
+          git push
