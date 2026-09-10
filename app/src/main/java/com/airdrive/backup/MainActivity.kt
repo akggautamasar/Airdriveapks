@@ -5,7 +5,6 @@ import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,15 +17,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import androidx.lifecycle.lifecycleScope
+import androidx.fragment.app.FragmentActivity
 import com.airdrive.backup.data.prefs.AppLockStore
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.AppNav
 import com.airdrive.backup.ui.theme.AirDriveTheme
 import com.airdrive.backup.ui.theme.ThemeMode
-import kotlinx.coroutines.flow.first
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var lockAuthenticating = false
     private var hasResumedOnce = false
     private var pausedAt = 0L
