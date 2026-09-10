@@ -64,6 +64,7 @@ fun SettingsOverviewScreen(nav: NavHostController) {
             }
             SettingsGroup("Preferences") {
                 SettingsRow("Security & Privacy", "Credentials, cloud data and privacy", Icons.Default.Lock, Orange, OrangeLight) { nav.navigate(Routes.SECURITY_PRIVACY) }
+                SettingsRow("App Lock", "Optional biometric or device PIN protection", Icons.Default.Lock, Orange, OrangeLight) { nav.navigate(Routes.APP_LOCK) }
                 SettingsRow("Notifications", "Backup progress and failure alerts", Icons.Default.Notifications, Purple, PurpleLight) { nav.navigate(Routes.NOTIFICATIONS) }
                 SettingsRow("Appearance", "Theme", Icons.Default.Palette, Purple, PurpleLight) { nav.navigate(Routes.APPEARANCE) }
                 SettingsRow("Network", "Wi-Fi, mobile data and roaming", Icons.Default.Wifi, Cyan, CyanLight) { nav.navigate(Routes.NETWORK) }
