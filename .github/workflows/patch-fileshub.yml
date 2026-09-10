@@ -1,0 +1,119 @@
+name: Patch Files Hub Actions
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-fileshub.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch FilesHubScreen
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/airdrive/backup/ui/screens/FilesHubScreen.kt')
+          s = p.read_text()
+          s = s.replace('import android.graphics.BitmapFactory\n', 'import android.graphics.BitmapFactory\nimport android.content.Intent\n')
+          s = s.replace('import com.airdrive.backup.util.Format\n', 'import com.airdrive.backup.util.Format\nimport com.airdrive.backup.work.WorkScheduler\n')
+          start = s.index('@Composable private fun FileRow(')
+          end = s.index('@Composable private fun Preview', start)
+          new = '''@Composable private fun FileRow(record: FileRecord, nav: NavHostController) {
+    val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
+    val tint = categoryTint(record.category)
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Preview(record, tint)
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f).clickable { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") }) {
+                Text(record.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text("${Format.bytes(record.sizeBytes)} • ${record.category.name.lowercase(Locale.getDefault()).replace('_', ' ')}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(if (record.status == UploadStatus.UPLOADED) Icons.Default.CheckCircle else Icons.Default.Schedule, null, tint = if (record.status == UploadStatus.UPLOADED) Green else Orange, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (record.status == UploadStatus.UPLOADED) "Backed up to Telegram" else "Pending upload", style = MaterialTheme.typography.labelSmall, color = if (record.status == UploadStatus.UPLOADED) Green else Orange)
+                }
+            }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Actions") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Preview") }, leadingIcon = { Icon(Icons.Default.Visibility, null) }, onClick = { menu = false; nav.navigate("${Routes.FILE_VIEWER}/${record.id}") })
+                    DropdownMenuItem(text = { Text("Upload now") }, leadingIcon = { Icon(Icons.Default.CloudUpload, null) }, onClick = { menu = false; WorkScheduler.runNowCategory(context, record.category) })
+                    DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                        menu = false
+                        if (record.localState == LocalState.PRESENT) {
+                            val uri = Uri.parse(record.uri)
+                            context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                type = mimeForName(record.displayName)
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }, "Share ${record.displayName}"))
+                        } else {
+                            android.widget.Toast.makeText(context, "This file is cloud-only. Open Preview to view it.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    })
+                    HorizontalDivider()
+                    DropdownMenuItem(text = { Text("File details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { menu = false; details = true })
+                }
+            }
+        }
+    }
+    if (details) {
+        AlertDialog(
+            onDismissRequest = { details = false },
+            icon = { Icon(Icons.Default.Info, null) },
+            title = { Text(record.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailLine("Size", Format.bytes(record.sizeBytes))
+                    DetailLine("Type", record.category.name.lowercase(Locale.getDefault()).replace('_', ' '))
+                    DetailLine("Backup status", record.status.name.lowercase(Locale.getDefault()).replace('_', ' '))
+                    DetailLine("Local copy", record.localState.name.lowercase(Locale.getDefault()))
+                    DetailLine("Revision", "v${record.revision}")
+                    if (record.telegramMessageId != null) DetailLine("Telegram message", record.telegramMessageId.toString())
+                }
+            },
+            confirmButton = { TextButton(onClick = { details = false }) { Text("Done") } }
+        )
+    }
+}
+
+@Composable private fun DetailLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.width(16.dp))
+        Text(value, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+private fun mimeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.getDefault())) {
+    "jpg", "jpeg" -> "image/jpeg"
+    "png" -> "image/png"
+    "webp" -> "image/webp"
+    "gif" -> "image/gif"
+    "mp4" -> "video/mp4"
+    "mkv" -> "video/x-matroska"
+    "webm" -> "video/webm"
+    "mp3" -> "audio/mpeg"
+    "m4a" -> "audio/mp4"
+    "wav" -> "audio/wav"
+    "pdf" -> "application/pdf"
+    "txt" -> "text/plain"
+    else -> "application/octet-stream"
+}
+
+'''
+          s = s[:start] + new + s[end:]
+          p.write_text(s)
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/airdrive/backup/ui/screens/FilesHubScreen.kt
+          git commit -m 'Improve Files Hub file actions' || exit 0
+          git push
