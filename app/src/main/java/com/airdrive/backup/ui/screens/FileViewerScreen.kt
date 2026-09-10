@@ -225,7 +225,7 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
             }
         } else {
             Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-                AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = player; useController = true; controllerAutoShow = true; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { it.player = player }, modifier = Modifier.fillMaxSize())
+                AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true; controllerAutoShow = true; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { it.player = player }, modifier = Modifier.fillMaxSize())
                 Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(16.dp), color = Color.Black.copy(alpha = .70f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { onFullscreen(!fullscreen) }) { Icon(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, if (fullscreen) "Exit full screen" else "Full screen", tint = Color.White) }
