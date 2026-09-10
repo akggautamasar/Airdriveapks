@@ -134,8 +134,8 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
             when {
                 loading -> LoadingPreview()
                 record == null -> CenterMessage("File unavailable", "The AirDrive file record could not be loaded.")
-                local != null -> LocalViewer(record!!, local!!) { fullscreen = it }
-                canStream(record!!) -> CloudViewer(record!!, td) { fullscreen = it }
+                local != null -> LocalViewer(record!!, local!!, fullscreen) { fullscreen = it }
+                canStream(record!!) -> CloudViewer(record!!, td, fullscreen) { fullscreen = it }
                 else -> CenterMessage("Preview unavailable", "This file is not on the device and has no usable Telegram backup reference.")
             }
         }
@@ -144,10 +144,10 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
 
 @Composable private fun LoadingPreview() { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Purple) } }
 
-@Composable private fun LocalViewer(r: FileRecord, uri: Uri, onFullscreen: (Boolean) -> Unit) = when (viewerType(r.displayName)) {
+@Composable private fun LocalViewer(r: FileRecord, uri: Uri, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit) = when (viewerType(r.displayName)) {
     ViewerType.IMAGE -> ImageViewer(uri)
-    ViewerType.VIDEO -> MediaViewer(r, uri, null, false, false, onFullscreen)
-    ViewerType.AUDIO -> MediaViewer(r, uri, null, true, false, onFullscreen)
+    ViewerType.VIDEO -> MediaViewer(r, uri, null, false, fullscreen, onFullscreen)
+    ViewerType.AUDIO -> MediaViewer(r, uri, null, true, fullscreen, onFullscreen)
     ViewerType.PDF -> PdfViewer(r, uri, null)
     ViewerType.EPUB -> EpubViewer(r, uri, null)
     ViewerType.TEXT -> TextViewer(r, uri, null)
@@ -155,12 +155,12 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
     ViewerType.OTHER -> OtherViewer(r)
 }
 
-@Composable private fun CloudViewer(r: FileRecord, td: TdClient, onFullscreen: (Boolean) -> Unit) {
+@Composable private fun CloudViewer(r: FileRecord, td: TdClient, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit) {
     val chat = r.destinationChannelId
     val msg = r.telegramMessageId ?: return
     when (viewerType(r.displayName)) {
-        ViewerType.VIDEO -> MediaViewer(r, null, td, false, false, onFullscreen, chat, msg)
-        ViewerType.AUDIO -> MediaViewer(r, null, td, true, false, onFullscreen, chat, msg)
+        ViewerType.VIDEO -> MediaViewer(r, null, td, false, fullscreen, onFullscreen, chat, msg)
+        ViewerType.AUDIO -> MediaViewer(r, null, td, true, fullscreen, onFullscreen, chat, msg)
         ViewerType.IMAGE -> CloudImageViewer(r, td, chat, msg)
         ViewerType.PDF -> PdfViewer(r, null, td, chat, msg)
         ViewerType.EPUB -> EpubViewer(r, null, td, chat, msg)
@@ -228,25 +228,27 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
             }
         } else {
             Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-                AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = !controlsLocked; controllerAutoShow = true; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { view -> view.player = player; view.useController = !controlsLocked }, modifier = Modifier.fillMaxSize())
-                Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(18.dp), color = Color.Black.copy(alpha = .68f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!audio) IconButton(onClick = { onFullscreen(!fullscreen) }) { Icon(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Full screen", tint = Color.White) }
-                        IconButton(onClick = { activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
-                        IconButton(onClick = { speedMenu = true }) { Text("${speed}×", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
-                        if (!audio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) IconButton(onClick = { activity?.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPictureAlt, "Picture in picture", tint = Color.White) }
-                        IconButton(onClick = { controlsLocked = !controlsLocked }) { Icon(if (controlsLocked) Icons.Default.Lock else Icons.Default.LockOpen, if (controlsLocked) "Unlock controls" else "Lock controls", tint = Color.White) }
-                    }
-                }
-                if (controlsLocked) {
-                    Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp), shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = .62f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
-                            Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(18.dp)); Text("Controls locked", color = Color.White, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 8.dp)); TextButton(onClick = { controlsLocked = false }) { Text("Unlock", color = Color.White) }
+                AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = !controlsLocked && !fullscreen; controllerAutoShow = !fullscreen; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { view -> view.player = player; view.useController = !controlsLocked && !fullscreen; view.controllerAutoShow = !fullscreen }, modifier = Modifier.fillMaxSize())
+                if (!fullscreen) {
+                    Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(18.dp), color = Color.Black.copy(alpha = .68f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (!audio) IconButton(onClick = { onFullscreen(!fullscreen) }) { Icon(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Full screen", tint = Color.White) }
+                            IconButton(onClick = { activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
+                            IconButton(onClick = { speedMenu = true }) { Text("${speed}×", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
+                            if (!audio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) IconButton(onClick = { activity?.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPictureAlt, "Picture in picture", tint = Color.White) }
+                            IconButton(onClick = { controlsLocked = !controlsLocked }) { Icon(if (controlsLocked) Icons.Default.Lock else Icons.Default.LockOpen, if (controlsLocked) "Unlock controls" else "Lock controls", tint = Color.White) }
                         }
                     }
-                }
-                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 58.dp)) {
-                    listOf(.5f, .75f, 1f, 1.25f, 1.5f, 2f).forEach { value -> DropdownMenuItem(text = { Text("${value}×") }, leadingIcon = { if (speed == value) Icon(Icons.Default.Check, null) }, onClick = { speed = value; player.setPlaybackSpeed(value); speedMenu = false }) }
+                    if (controlsLocked) {
+                        Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp), shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = .62f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
+                                Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(18.dp)); Text("Controls locked", color = Color.White, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 8.dp)); TextButton(onClick = { controlsLocked = false }) { Text("Unlock", color = Color.White) }
+                            }
+                        }
+                    }
+                    DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 58.dp)) {
+                        listOf(.5f, .75f, 1f, 1.25f, 1.5f, 2f).forEach { value -> DropdownMenuItem(text = { Text("${value}×") }, leadingIcon = { if (speed == value) Icon(Icons.Default.Check, null) }, onClick = { speed = value; player.setPlaybackSpeed(value); speedMenu = false }) }
+                    }
                 }
             }
             if (!fullscreen) MediaInfoCard(r, audio)
