@@ -8,8 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -206,6 +206,9 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
         builder.build()
     }
     var error by remember(r.id, uri, chat, msg) { mutableStateOf<String?>(null) }
+    var controlsLocked by rememberSaveable(r.id, uri, chat, msg) { mutableStateOf(false) }
+    var speedMenu by remember { mutableStateOf(false) }
+    var speed by rememberSaveable(r.id, uri, chat, msg) { mutableFloatStateOf(1f) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener { override fun onPlayerError(e: androidx.media3.common.PlaybackException) { error = e.message ?: "Playback failed" } }
@@ -213,7 +216,7 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
         val mediaUri = uri ?: Uri.parse("airdrive://telegram/$chat/$msg/${Uri.encode(r.displayName)}")
         val mime = if (audio) audioMime(r.displayName) else videoMime(r.displayName)
         val item = MediaItem.Builder().setUri(mediaUri).apply { if (mime != null) setMimeType(mime) }.build()
-        player.setMediaItem(item); player.prepare(); player.playWhenReady = true
+        player.setMediaItem(item); player.prepare(); player.playWhenReady = true; player.setPlaybackSpeed(speed)
         onDispose { player.removeListener(listener); player.release(); onFullscreen(false) }
     }
 
@@ -225,14 +228,25 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
             }
         } else {
             Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) {
-                AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true; controllerAutoShow = true; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { it.player = player }, modifier = Modifier.fillMaxSize())
-                if (!fullscreen) Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(16.dp), color = Color.Black.copy(alpha = .70f)) {
+                AndroidView(factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = !controlsLocked; controllerAutoShow = true; controllerHideOnTouch = true; controllerShowTimeoutMs = 5000; keepScreenOn = true } }, update = { view -> view.player = player; view.useController = !controlsLocked }, modifier = Modifier.fillMaxSize())
+                Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(18.dp), color = Color.Black.copy(alpha = .68f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { onFullscreen(true) }) { Icon(Icons.Default.Fullscreen, "Full screen", tint = Color.White) }
-                        IconButton(onClick = {
-                            activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                        }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
+                        if (!audio) IconButton(onClick = { onFullscreen(!fullscreen) }) { Icon(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, "Full screen", tint = Color.White) }
+                        IconButton(onClick = { activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
+                        IconButton(onClick = { speedMenu = true }) { Text("${speed}×", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold) }
+                        if (!audio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) IconButton(onClick = { activity?.enterPictureInPictureMode(android.app.PictureInPictureParams.Builder().setAspectRatio(android.util.Rational(16, 9)).build()) }) { Icon(Icons.Default.PictureInPictureAlt, "Picture in picture", tint = Color.White) }
+                        IconButton(onClick = { controlsLocked = !controlsLocked }) { Icon(if (controlsLocked) Icons.Default.Lock else Icons.Default.LockOpen, if (controlsLocked) "Unlock controls" else "Lock controls", tint = Color.White) }
                     }
+                }
+                if (controlsLocked) {
+                    Surface(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp), shape = RoundedCornerShape(20.dp), color = Color.Black.copy(alpha = .62f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
+                            Icon(Icons.Default.Lock, null, tint = Color.White, modifier = Modifier.size(18.dp)); Text("Controls locked", color = Color.White, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 8.dp)); TextButton(onClick = { controlsLocked = false }) { Text("Unlock", color = Color.White) }
+                        }
+                    }
+                }
+                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }, modifier = Modifier.align(Alignment.TopEnd).padding(top = 58.dp)) {
+                    listOf(.5f, .75f, 1f, 1.25f, 1.5f, 2f).forEach { value -> DropdownMenuItem(text = { Text("${value}×") }, leadingIcon = { if (speed == value) Icon(Icons.Default.Check, null) }, onClick = { speed = value; player.setPlaybackSpeed(value); speedMenu = false }) }
                 }
             }
             if (!fullscreen) MediaInfoCard(r, audio)
