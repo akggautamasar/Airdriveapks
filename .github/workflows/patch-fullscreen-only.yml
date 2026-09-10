@@ -1,0 +1,48 @@
+name: Patch fullscreen video UI
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Make fullscreen video-only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/airdrive/backup/ui/screens/FileViewerScreen.kt')
+          s = p.read_text()
+          old = '''                Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(16.dp), color = Color.Black.copy(alpha = .70f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { onFullscreen(!fullscreen) }) { Icon(if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, if (fullscreen) "Exit full screen" else "Full screen", tint = Color.White) }
+                        IconButton(onClick = {
+                            activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                        }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
+                    }
+                }'''
+          new = '''                if (!fullscreen) {
+                    Surface(modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), shape = RoundedCornerShape(16.dp), color = Color.Black.copy(alpha = .70f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { onFullscreen(true) }) { Icon(Icons.Default.Fullscreen, "Full screen", tint = Color.White) }
+                            IconButton(onClick = {
+                                activity?.requestedOrientation = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                            }) { Icon(Icons.Default.ScreenRotation, "Rotate screen", tint = Color.White) }
+                        }
+                    }
+                }'''
+          if old not in s:
+              raise SystemExit('fullscreen controls block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/airdrive/backup/ui/screens/FileViewerScreen.kt
+          git diff --cached --quiet || git commit -m 'Make fullscreen video-only'
+          git push
