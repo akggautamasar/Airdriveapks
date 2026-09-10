@@ -81,6 +81,7 @@ object Routes {
     const val FILE_HISTORY = "file_history"
     const val SETTINGS = "settings"
     const val SECURITY_PRIVACY = "security_privacy"
+    const val APP_LOCK = "app_lock"
     const val NOTIFICATIONS = "notifications"
     const val APPEARANCE = "appearance"
     const val NETWORK = "network"
@@ -140,6 +141,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
             composable(Routes.SETTINGS) { SettingsOverviewScreen(navController) }
             composable(Routes.SECURITY_PRIVACY) { SecurityPrivacyScreen(navController) }
+            composable(Routes.APP_LOCK) { AppLockSettingsScreen(navController) }
             composable(Routes.NOTIFICATIONS) { NotificationsSettingsScreen(navController) }
             composable(Routes.APPEARANCE) { AppearanceSettingsScreen(navController) }
             composable(Routes.NETWORK) { NetworkSettingsScreen(navController) }
