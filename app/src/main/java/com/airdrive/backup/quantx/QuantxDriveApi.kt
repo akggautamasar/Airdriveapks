@@ -69,7 +69,11 @@ class QuantxDriveApi(private val context: Context) {
     }
 
     suspend fun stats(): Result<QuantStats> = requestResult("GET", "/api/stats").map { o ->
-        QuantStats(o.optInt("total_files", o.optInt("files", 0)), o.optLong("total_bytes", o.optLong("size", 0L)), o.optInt("favorites", 0))
+        QuantStats(
+            totalFiles = o.optInt("total_files"),
+            totalBytes = o.optLong("total_size"),
+            favorites = o.optInt("favorites_count")
+        )
     }
 
     suspend fun sync(): Result<JSONObject> = requestResult("POST", "/api/sync/all")
