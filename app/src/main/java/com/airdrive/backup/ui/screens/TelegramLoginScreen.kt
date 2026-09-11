@@ -1,6 +1,5 @@
 package com.airdrive.backup.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,7 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -103,6 +101,7 @@ fun TelegramLoginScreen(nav: NavHostController) {
                             Spacer(Modifier.height(14.dp))
                             Button(onClick = {
                                 submitting = true; errorText = null
+                                context.getSharedPreferences("quantxdrive_identity", 0).edit().putString("phone", phone.trim()).apply()
                                 scope.launch {
                                     try { tdClient.submitPhoneNumber(phone.trim()) } catch (e: Exception) { errorText = e.message } finally { submitting = false }
                                 }
