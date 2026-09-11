@@ -45,6 +45,7 @@ import androidx.navigation.navArgument
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.screens.*
+import com.airdrive.backup.quantx.QuantxDriveScreen
 import com.airdrive.backup.ui.theme.AirNavSelected
 import kotlinx.coroutines.flow.combine
 
@@ -86,6 +87,7 @@ object Routes {
     const val APPEARANCE = "appearance"
     const val NETWORK = "network"
     const val FILE_VIEWER = "file_viewer"
+    const val QUANTXDRIVE = "quantxdrive"
 }
 
 private data class BottomTab(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
@@ -164,6 +166,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.VERIFY) { VerifyScreen(navController) }
             composable(Routes.FILE_HISTORY) { FileHistoryScreen(navController) }
             composable("${Routes.RUN_DETAIL}/{runId}", arguments = listOf(navArgument("runId") { type = NavType.LongType })) { entry -> RunDetailScreen(navController, entry.arguments?.getLong("runId") ?: 0L) }
+            composable(Routes.QUANTXDRIVE) { QuantxDriveScreen(navController) }
         }
     }
 }
