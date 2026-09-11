@@ -121,12 +121,15 @@ private fun RemotePlayer(url: String?, mime: String, audio: Boolean) {
 @Composable
 private fun RemoteImage(url: String?) {
     val bitmap by produceState<Bitmap?>(null, url) { value = withContext(Dispatchers.IO) { openStream(url) { BitmapFactory.decodeStream(it) } } }
-    if (bitmap == null) Message("Loading image…") else {
-        var scale by remember(bitmap) { mutableFloatStateOf(1f) }
-        var x by remember(bitmap) { mutableFloatStateOf(0f) }
-        var y by remember(bitmap) { mutableFloatStateOf(0f) }
+    val imageBitmap = bitmap
+    if (imageBitmap == null) Message("Loading image…") else {
+        var scale by remember(imageBitmap) { mutableFloatStateOf(1f) }
+        var x by remember(imageBitmap) { mutableFloatStateOf(0f) }
+        var y by remember(imageBitmap) { mutableFloatStateOf(0f) }
         val transform = rememberTransformableState { zoom, pan, _ -> scale = (scale * zoom).coerceIn(1f, 5f); x += pan.x; y += pan.y }
-        Box(Modifier.fillMaxSize().background(Color(0xFF101216)), Alignment.Center) { Image(bitmap.asImageBitmap(), "Image preview", Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = x; translationY = y }.transformable(transform), ContentScale.Fit) }
+        Box(Modifier.fillMaxSize().background(Color(0xFF101216)), contentAlignment = Alignment.Center) {
+            Image(bitmap = imageBitmap.asImageBitmap(), contentDescription = "Image preview", modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = x; translationY = y }.transformable(transform), contentScale = ContentScale.Fit)
+        }
     }
 }
 
@@ -135,8 +138,9 @@ private fun RemotePdf(url: String?) {
     val context = LocalContext.current
     val file by produceState<File?>(null, url) { value = withContext(Dispatchers.IO) { cacheFile(context, url, ".pdf") } }
     if (file == null) Message("Loading PDF…", "Preview is cached temporarily for viewing.") else {
-        val pages by produceState<List<Bitmap>>(emptyList(), file) { value = withContext(Dispatchers.IO) { renderPdf(file!!) } }
-        if (pages.isEmpty()) Message("Unable to preview PDF", "Use Download to save the original file.") else LazyColumn(contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(pages) { Image(it.asImageBitmap(), "PDF page", Modifier.fillMaxWidth(), ContentScale.FillWidth) } }
+        val pdfFile = file
+        val pages by produceState<List<Bitmap>>(emptyList(), pdfFile) { value = withContext(Dispatchers.IO) { renderPdf(pdfFile!!) } }
+        if (pages.isEmpty()) Message("Unable to preview PDF", "Use Download to save the original file.") else LazyColumn(contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(pages) { page -> Image(bitmap = page.asImageBitmap(), contentDescription = "PDF page", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth) } }
     }
 }
 
@@ -155,7 +159,7 @@ private fun OtherFile(file: QuantFile, api: QuantxDriveApi) {
     }
 }
 
-@Composable private fun Message(title: String, detail: String? = null) { Box(Modifier.fillMaxSize(), Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { CircularProgressIndicator(color = ViewerPurple); Spacer(Modifier.height(14.dp)); Text(title, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center); detail?.let { Spacer(Modifier.height(6.dp)); Text(it, textAlign = TextAlign.Center) } } } }
+@Composable private fun Message(title: String, detail: String? = null) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { CircularProgressIndicator(color = ViewerPurple); Spacer(Modifier.height(14.dp)); Text(title, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center); detail?.let { Spacer(Modifier.height(6.dp)); Text(it, textAlign = TextAlign.Center) } } } }
 
 private suspend fun downloadFile(context: Context, api: QuantxDriveApi, file: QuantFile): Result<Uri?> = withContext(Dispatchers.IO) {
     val url = api.mediaUrl(file.id) ?: return@withContext Result.failure(IllegalStateException("Download URL unavailable"))
