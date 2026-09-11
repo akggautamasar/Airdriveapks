@@ -27,7 +27,6 @@ data class QuantFile(
 )
 
 data class QuantStats(val totalFiles: Int, val totalBytes: Long, val favorites: Int)
-
 data class QuantShare(val token: String, val expiresAt: Long, val passwordProtected: Boolean)
 
 class QuantxDriveApi(private val context: Context) {
@@ -85,7 +84,11 @@ class QuantxDriveApi(private val context: Context) {
         put("password", password)
     }).map { o -> QuantShare(o.optString("share_token"), o.optLong("expires_at"), o.optBoolean("password_protected")) }
 
+    /** Authenticated, Range-capable media endpoint used by ExoPlayer and DownloadManager. */
     fun mediaUrl(fileId: Long): String? = savedToken?.let { "$BASE_URL/api/media/$it/$fileId" }
+
+    /** Public share stream endpoint created by /api/share/{id}; no app login is required. */
+    fun sharedStreamUrl(shareToken: String): String = "$BASE_URL/api/shared/$shareToken/stream"
 
     private suspend fun requestResult(method: String, path: String, body: JSONObject? = null): Result<JSONObject> = withContext(Dispatchers.IO) {
         runCatching {
