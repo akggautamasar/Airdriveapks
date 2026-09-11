@@ -18,16 +18,19 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.ui.nav.Routes
 
+private const val QUANTX_ALLOWED_PHONE = "+916307868952"
 private val Blue = Color(0xFF2F6FEA)
 private val BlueLight = Color(0xFFEAF2FF)
 private val Green = Color(0xFF20A463)
@@ -43,6 +46,9 @@ private val Background = Color(0xFFF7F9FD)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsOverviewScreen(nav: NavHostController) {
+    val context = LocalContext.current
+    val identity = remember { context.getSharedPreferences("quantxdrive_identity", 0).getString("phone", "") ?: "" }
+    val quantEnabled = identity.filter { !it.isWhitespace() }.replace("-", "") == QUANTX_ALLOWED_PHONE
     Scaffold(containerColor = Background, topBar = {
         TopAppBar(title = { Text("Settings", fontWeight = FontWeight.Bold) }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Background))
     }) { padding ->
@@ -61,6 +67,11 @@ fun SettingsOverviewScreen(nav: NavHostController) {
                 SettingsRow("Backup", "Automatic backup, schedule and file types", Icons.Default.Folder, Blue, BlueLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
                 SettingsRow("Storage", "Permissions and scan locations", Icons.Default.Folder, Green, GreenLight) { nav.navigate(Routes.STORAGE_ACCESS) }
                 SettingsRow("Telegram", "Connection and backup destination", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.TELEGRAM_SETTINGS) }
+            }
+            if (quantEnabled) {
+                SettingsGroup("Private tools") {
+                    SettingsRow("QuantxDrive", "Private cloud storage for your authorized account", Icons.Default.Cloud, Purple, PurpleLight) { nav.navigate(Routes.QUANTXDRIVE) }
+                }
             }
             SettingsGroup("Preferences") {
                 SettingsRow("Security & Privacy", "Credentials, cloud data and privacy", Icons.Default.Lock, Orange, OrangeLight) { nav.navigate(Routes.SECURITY_PRIVACY) }
