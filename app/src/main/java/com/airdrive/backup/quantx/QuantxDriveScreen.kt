@@ -1,30 +1,25 @@
 package com.airdrive.backup.quantx
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -58,6 +53,8 @@ fun QuantxDriveScreen(nav: NavHostController) {
     var favoritesOnly by remember { mutableStateOf(false) }
     var stats by remember { mutableStateOf<QuantStats?>(null) }
     var syncing by remember { mutableStateOf(false) }
+    var selectedFile by remember { mutableStateOf<QuantFile?>(null) }
+    val listState = rememberLazyListState()
 
     val allowed = identity.filter { !it.isWhitespace() }.replace("-", "") == ALLOWED_PHONE
 
@@ -65,8 +62,9 @@ fun QuantxDriveScreen(nav: NavHostController) {
         loading = true
         error = null
         scope.launch {
-            val result = api.files(selectedCategory, search.takeIf { it.isNotBlank() }, favoritesOnly)
-            result.onSuccess { files = it }.onFailure { error = it.message }
+            api.files(selectedCategory, search.takeIf { it.isNotBlank() }, favoritesOnly)
+                .onSuccess { files = it }
+                .onFailure { error = it.message }
             api.stats().onSuccess { stats = it }
             loading = false
         }
@@ -74,6 +72,12 @@ fun QuantxDriveScreen(nav: NavHostController) {
 
     LaunchedEffect(phase, selectedCategory, favoritesOnly) {
         if (phase == "home") load()
+    }
+
+    LaunchedEffect(search) {
+        if (phase != "home") return@LaunchedEffect
+        kotlinx.coroutines.delay(350)
+        load()
     }
 
     if (!allowed) {
@@ -135,7 +139,7 @@ fun QuantxDriveScreen(nav: NavHostController) {
         topBar = {
             TopAppBar(
                 title = { Column { Text("QuantxDrive", fontWeight = FontWeight.Bold); Text("Private storage", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
-                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Text("‹", style = MaterialTheme.typography.headlineMedium) } },
+                navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
                 actions = {
                     IconButton(onClick = { load() }) { Icon(Icons.Default.Refresh, contentDescription = "Refresh") }
                     IconButton(onClick = { api.logout(); phase = "login" }) { Icon(Icons.Default.Lock, contentDescription = "Lock") }
@@ -143,57 +147,101 @@ fun QuantxDriveScreen(nav: NavHostController) {
             )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEDEEFF))) {
-                Column(Modifier.padding(18.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(QBlue), contentAlignment = Alignment.Center) { Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(28.dp)) }
-                        Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) {
-                            Text("Your private cloud", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                            Text("QuantxDrive is available only to $ALLOWED_PHONE", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize()) {
+                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEDEEFF))) {
+                    Column(Modifier.padding(18.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(QBlue), contentAlignment = Alignment.Center) { Icon(Icons.Default.Cloud, null, tint = Color.White, modifier = Modifier.size(28.dp)) }
+                            Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) {
+                                Text("Your private cloud", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("QuantxDrive is available only to $ALLOWED_PHONE", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MiniStat(stats?.totalFiles?.toString() ?: "—", "Files", Modifier.weight(1f))
+                            MiniStat(formatBytes(stats?.totalBytes ?: 0), "Storage", Modifier.weight(1f))
+                            MiniStat(stats?.favorites?.toString() ?: "—", "Favorites", Modifier.weight(1f))
                         }
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MiniStat(stats?.totalFiles?.toString() ?: "—", "Files", Modifier.weight(1f))
-                        MiniStat(formatBytes(stats?.totalBytes ?: 0), "Storage", Modifier.weight(1f))
-                        MiniStat(stats?.favorites?.toString() ?: "—", "Favorites", Modifier.weight(1f))
+                }
+
+                OutlinedTextField(value = search, onValueChange = { search = it }, singleLine = true, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (search.isNotEmpty()) IconButton(onClick = { search = "" }) { Icon(Icons.Default.Clear, "Clear") } }, placeholder = { Text("Search your QuantxDrive") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), shape = RoundedCornerShape(15.dp))
+
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = selectedCategory == null && !favoritesOnly, onClick = { selectedCategory = null; favoritesOnly = false }, label = { Text("All") })
+                    FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = !favoritesOnly; if (favoritesOnly) selectedCategory = null }, label = { Text("Favorites") }, leadingIcon = { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(16.dp)) })
+                    listOf("photos" to "Photos", "videos" to "Videos", "audio" to "Audio", "pdfs" to "PDFs", "word_excel" to "Office", "call_recordings" to "Calls", "other_files" to "Other").forEach { (key, label) ->
+                        FilterChip(selected = selectedCategory == key && !favoritesOnly, onClick = { favoritesOnly = false; selectedCategory = if (selectedCategory == key) null else key }, label = { Text(label) })
+                    }
+                }
+
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (loading) "Loading…" else "${files.size} loaded • ${stats?.totalFiles ?: files.size} total", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    if (syncing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    TextButton(enabled = !syncing, onClick = {
+                        syncing = true
+                        scope.launch { api.sync().onFailure { error = it.message }; syncing = false; load() }
+                    }) { Icon(Icons.Default.Sync, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("Sync") }
+                }
+
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) }
+
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    items(files, key = { it.id }) { file ->
+                        QuantFileRow(
+                            file = file,
+                            onOpen = { selectedFile = file },
+                            onFavorite = {
+                                scope.launch {
+                                    api.toggleFavorite(file.id).onFailure { error = it.message }
+                                    load()
+                                }
+                            },
+                            onShare = { shareFile(context, api, file, scope) },
+                            onTelegram = { file.tgLink?.let { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } } }
+                        )
                     }
                 }
             }
 
-            OutlinedTextField(value = search, onValueChange = { search = it }, singleLine = true, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (search.isNotEmpty()) TextButton(onClick = { search = ""; load() }) { Text("Clear") } }, placeholder = { Text("Search your QuantxDrive") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), shape = RoundedCornerShape(15.dp))
-
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = selectedCategory == null, onClick = { selectedCategory = null }, label = { Text("All") })
-                FilterChip(selected = favoritesOnly, onClick = { favoritesOnly = !favoritesOnly }, label = { Text("Favorites") }, leadingIcon = { Icon(Icons.Default.Favorite, null, modifier = Modifier.size(16.dp)) })
-                listOf("photos" to "Photos", "videos" to "Videos", "pdfs" to "PDFs", "audio" to "Audio").forEach { (key, label) -> FilterChip(selected = selectedCategory == key, onClick = { selectedCategory = if (selectedCategory == key) null else key }, label = { Text(label) }) }
-            }
-
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (loading) "Loading…" else "${files.size} files", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                if (syncing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                TextButton(enabled = !syncing, onClick = {
-                    syncing = true
-                    scope.launch { api.sync().onFailure { error = it.message }; syncing = false; load() }
-                }) { Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)); Text("Sync") }
-            }
-
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp)) }
-
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                items(files, key = { it.id }) { file -> QuantFileRow(file, api) {
-                    scope.launch { api.toggleFavorite(file.id); load() }
-                } }
+            selectedFile?.let { file ->
+                Surface(Modifier.fillMaxSize(), color = QBg) {
+                    QuantxDriveViewerScreen(
+                        file = file,
+                        api = api,
+                        onBack = { selectedFile = null },
+                        onFavorite = {
+                            scope.launch {
+                                api.toggleFavorite(file.id).onFailure { error = it.message }
+                                api.files(selectedCategory, search.takeIf { it.isNotBlank() }, favoritesOnly).onSuccess { files = it }
+                            }
+                        }
+                    )
+                }
             }
         }
     }
 }
 
-@Composable private fun QuantFileRow(file: QuantFile, api: QuantxDriveApi, onFavorite: () -> Unit) {
-    val icon = when { file.category == "photos" -> Icons.Default.Image; file.category == "videos" -> Icons.Default.VideoLibrary; file.category == "audio" -> Icons.Default.MusicNote; file.category == "pdfs" -> Icons.Default.Description; else -> Icons.Default.Folder }
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+@Composable
+private fun QuantFileRow(
+    file: QuantFile,
+    onOpen: () -> Unit,
+    onFavorite: () -> Unit,
+    onShare: () -> Unit,
+    onTelegram: () -> Unit,
+) {
+    val icon = when (file.category.lowercase()) {
+        "photos" -> Icons.Default.Image
+        "videos" -> Icons.Default.VideoLibrary
+        "audio" -> Icons.Default.MusicNote
+        "pdfs" -> Icons.Default.Description
+        else -> Icons.Default.InsertDriveFile
+    }
+    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen), shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(50.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFFF0F0F8)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = QPurple, modifier = Modifier.size(25.dp)) }
             Spacer(Modifier.width(12.dp))
@@ -202,7 +250,20 @@ fun QuantxDriveScreen(nav: NavHostController) {
                 Text("${formatBytes(file.size)} • ${file.category.ifBlank { "other" }}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onFavorite) { Icon(Icons.Default.Favorite, null, tint = if (file.favorite) QPurple else MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (file.tgLink != null) IconButton(onClick = { /* Telegram deep-link action is intentionally kept in the web app for now. */ }) { Icon(Icons.Default.Send, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+            IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (file.tgLink != null) IconButton(onClick = onTelegram) { Icon(Icons.Default.Send, "Open in Telegram", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+}
+
+private fun shareFile(context: Context, api: QuantxDriveApi, file: QuantFile, scope: kotlinx.coroutines.CoroutineScope) {
+    scope.launch {
+        api.createShare(file.id).onSuccess { share ->
+            context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, file.filename)
+                putExtra(Intent.EXTRA_TEXT, api.sharedStreamUrl(share.token))
+            }, "Share file"))
         }
     }
 }
