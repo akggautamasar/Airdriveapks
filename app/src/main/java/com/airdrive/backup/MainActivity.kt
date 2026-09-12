@@ -1,11 +1,14 @@
 package com.airdrive.backup
 
+import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
 import android.graphics.Color as AndroidColor
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Rational
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -28,14 +31,26 @@ class MainActivity : FragmentActivity() {
     private var hasResumedOnce = false
     private var pausedAt = 0L
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (!QuantxDrivePip.isEnabled) return
+        if (isFinishing || isChangingConfigurations || isInPictureInPictureMode) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching {
+                val params = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .build()
+                enterPictureInPictureMode(params)
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         val shouldPrompt = !hasResumedOnce || pausedAt == 0L ||
             SystemClock.elapsedRealtime() - pausedAt > 700L
         hasResumedOnce = true
         if (shouldPrompt) {
-            // Wait until the Compose content and the Activity window are fully resumed.
-            // This avoids racing another startup dialog or ActivityResult transaction.
             mainHandler.postDelayed({ maybePromptForAppLock() }, 450L)
         }
     }
@@ -91,7 +106,6 @@ class MainActivity : FragmentActivity() {
             )
         }.onFailure {
             lockAuthenticating = false
-            // Never turn an optional security feature into a startup crash.
         }
     }
 
@@ -133,4 +147,10 @@ class MainActivity : FragmentActivity() {
     companion object {
         const val EXTRA_ROUTE = "airdrive_route"
     }
+}
+
+/** Shared bridge between the QuantxDrive viewer and the hosting Activity. */
+object QuantxDrivePip {
+    @Volatile
+    var isEnabled: Boolean = false
 }
