@@ -10,12 +10,10 @@ on:
   push:
     branches: [ "main" ]
 
+# Only one run at a time so the TDLib cache is never written concurrently.
 concurrency:
   group: build-apk
   cancel-in-progress: false
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -39,8 +37,12 @@ jobs:
         run: |
           REF="${{ github.event.inputs.tdlib_ref || 'd1085f9cebc5a62379991ae1652673954f229c1f' }}"
           SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/heads/$REF" | cut -f1)
-          if [ -z "$SHA" ]; then SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/tags/$REF" | cut -f1); fi
-          if [ -z "$SHA" ]; then SHA="$REF"; fi
+          if [ -z "$SHA" ]; then
+            SHA=$(git ls-remote https://github.com/tdlib/td.git "refs/tags/$REF" | cut -f1)
+          fi
+          if [ -z "$SHA" ]; then
+            SHA="$REF"
+          fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Resolved tdlib/td $REF -> $SHA"
 
@@ -65,7 +67,10 @@ jobs:
         if: steps.tdlib_cache.outputs.cache-hit != 'true'
         working-directory: td-src/example/android
         run: |
-          docker buildx build --build-arg TDLIB_INTERFACE=Java --output tdlib .
+          docker buildx build \
+            --build-arg TDLIB_INTERFACE=Java \
+            --output tdlib \
+            .
 
       - name: Inspect TDLib Docker build output
         run: |
@@ -79,13 +84,14 @@ jobs:
           test -f "$ZIP" || { echo "::error::$ZIP not found"; exit 1; }
           mkdir -p td-src/example/android/tdlib/extracted
           unzip -q -o "$ZIP" -d td-src/example/android/tdlib/extracted
+          echo "Extracted contents:"
           find td-src/example/android/tdlib/extracted -maxdepth 5 | head -200
 
       - name: Vendor TDLib native libraries into app
         run: |
           set -e
           ROOT="td-src/example/android/tdlib/extracted"
-          test -d "$ROOT" || { echo "::error::TDLib extracted output directory '$ROOT' does not exist"; exit 1; }
+          test -d "$ROOT" || { echo "::error::TDLib extracted output directory '$ROOT' does not exist at all"; exit 1; }
           mkdir -p app/src/main/jniLibs
           rm -rf app/src/main/jniLibs/*
           SO_COUNT=0
@@ -95,14 +101,20 @@ jobs:
             cp "$so_file" "app/src/main/jniLibs/$abi_dir/"
             SO_COUNT=$((SO_COUNT + 1))
           done < <(find "$ROOT" \( -name "libtdjni.so" -o -name "libtdjson.so" \) -print0)
-          if [ "$SO_COUNT" -eq 0 ]; then echo "::error::No TDLib native libraries found"; exit 1; fi
+          if [ "$SO_COUNT" -eq 0 ]; then
+            echo "::error::No libtdjni.so/libtdjson.so files found anywhere under $ROOT"
+            exit 1
+          fi
           JAVA_SRC_DIR=$(find "$ROOT" -type d -path "*/org/drinkless/tdlib" | head -n1)
-          if [ -z "$JAVA_SRC_DIR" ]; then echo "::error::Could not find generated TDLib Java sources"; exit 1; fi
+          if [ -z "$JAVA_SRC_DIR" ]; then
+            echo "::error::Could not find a generated org/drinkless/tdlib Java source directory under $ROOT"
+            exit 1
+          fi
           PACKAGE_ROOT=$(dirname "$(dirname "$(dirname "$JAVA_SRC_DIR")")")
           mkdir -p app/src/main/java
           rm -rf app/src/main/java/org
           cp -r "$PACKAGE_ROOT/org" app/src/main/java/org
-          echo "Vendored $SO_COUNT native library files"
+          echo "Vendored $SO_COUNT libtdjni/libtdjson file(s) across ABIs"
           find app/src/main/java/org -maxdepth 4 -type f -name "*.java"
 
       - name: Check whether release signing secrets are configured
@@ -110,7 +122,11 @@ jobs:
         env:
           RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
-          if [ -n "$RELEASE_KEYSTORE_B64" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$RELEASE_KEYSTORE_B64" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -125,125 +141,14 @@ jobs:
           restore-keys: |
             gradle-
 
-      - name: Ensure QuantxDrive Media3 streaming is authenticated
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt')
-          s = p.read_text()
-          if 'DefaultHttpDataSource' in s and 'authToken: String?' in s:
-              print('Quantx streaming patch already present')
-              raise SystemExit(0)
-          s = s.replace(
-              'import androidx.media3.exoplayer.ExoPlayer\n',
-              'import androidx.media3.exoplayer.ExoPlayer\nimport androidx.media3.exoplayer.source.DefaultMediaSourceFactory\nimport androidx.media3.datasource.DefaultHttpDataSource\n'
-          )
-          start = s.index('@OptIn(UnstableApi::class)\n@Composable\nprivate fun RemotePlayer')
-          end = s.index('\n\n@Composable\nprivate fun RemoteImage', start)
-          replacement = '''@OptIn(UnstableApi::class)
-@Composable
-private fun RemotePlayer(
-    url: String?,
-    mime: String,
-    audio: Boolean,
-    fullscreen: Boolean,
-    onFullscreen: (Boolean) -> Unit,
-    authToken: String?
-) {
-    val context = LocalContext.current
-    if (url.isNullOrBlank()) { Message("Streaming unavailable"); return }
-    val httpFactory = remember(authToken) {
-        DefaultHttpDataSource.Factory()
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(120_000)
-            .setAllowCrossProtocolRedirects(true)
-            .setDefaultRequestProperties(
-                buildMap {
-                    put("Accept", "*/*")
-                    authToken?.takeIf { it.isNotBlank() }?.let { put("Authorization", "Bearer $it") }
-                }
-            )
-    }
-    val player = remember(url, authToken) {
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
-            .build()
-    }
-    var showFullscreenControl by remember(url, fullscreen) { mutableStateOf(true) }
-    LaunchedEffect(showFullscreenControl, fullscreen) {
-        if (showFullscreenControl) { delay(3000); showFullscreenControl = false }
-    }
-    DisposableEffect(player, url) {
-        player.setMediaItem(MediaItem.Builder().setUri(Uri.parse(url)).build())
-        player.prepare()
-        player.playWhenReady = true
-        onDispose { player.release() }
-    }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = true
-                    controllerAutoShow = true
-                    controllerHideOnTouch = true
-                    setControllerShowTimeoutMs(3000)
-                    setOnTouchListener { _, _ -> showFullscreenControl = true; false }
-                }
-            },
-            update = {
-                it.player = player
-                it.useController = true
-                it.controllerAutoShow = true
-                it.controllerHideOnTouch = true
-                it.setControllerShowTimeoutMs(3000)
-            },
-            modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
-        )
-        if (showFullscreenControl) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopEnd).padding(if (fullscreen) 18.dp else 12.dp),
-                shape = MaterialTheme.shapes.medium,
-                color = Color.Black.copy(alpha = 0.70f)
-            ) {
-                IconButton(onClick = { showFullscreenControl = true; onFullscreen(!fullscreen) }) {
-                    Icon(
-                        if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                        contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
-                        tint = Color.White
-                    )
-                }
-            }
-        }
-    }
-}'''
-          s = s[:start] + replacement + s[end:]
-          s = s.replace(
-              'RemotePlayer(api.mediaUrl(file.id), file.mime, false, fullscreen, ::setFullscreen)',
-              'RemotePlayer(api.mediaUrl(file.id), file.mime, false, fullscreen, ::setFullscreen, api.savedToken)'
-          )
-          s = s.replace(
-              'RemotePlayer(api.mediaUrl(file.id), file.mime, true, fullscreen, ::setFullscreen)',
-              'RemotePlayer(api.mediaUrl(file.id), file.mime, true, fullscreen, ::setFullscreen, api.savedToken)'
-          )
-          p.write_text(s)
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
-          if git diff --cached --quiet; then
-            echo "No source commit required"
-          else
-            git commit -m "fix(quantx): make video streaming authenticated and adaptive"
-            git push
-          fi
-
       - name: Build debug APK
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: |
-          ./gradlew assembleDebug -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
+          ./gradlew assembleDebug \
+            -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
+            -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
 
       - name: Build signed release APK
         if: steps.release_signing.outputs.enabled == 'true'
@@ -257,7 +162,9 @@ private fun RemotePlayer(
         run: |
           echo "$RELEASE_KEYSTORE_B64" | base64 -d > release.keystore
           export RELEASE_KEYSTORE_PATH="$PWD/release.keystore"
-          ./gradlew assembleRelease -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
+          ./gradlew assembleRelease \
+            -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
+            -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
