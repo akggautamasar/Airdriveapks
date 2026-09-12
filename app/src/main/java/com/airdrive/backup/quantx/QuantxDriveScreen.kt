@@ -137,6 +137,18 @@ fun QuantxDriveScreen(nav: NavHostController) {
         } }; return
     }
 
+    // The viewer must leave the QuantxDrive list Scaffold completely.
+    // Otherwise the parent TopAppBar remains visible over fullscreen/PiP media.
+    selectedFile?.let { file ->
+        QuantxDriveViewerScreen(
+            file = file,
+            api = api,
+            onBack = { selectedFile = null },
+            onFavorite = { scope.launch { api.toggleFavorite(file.id); reload() } }
+        )
+        return
+    }
+
     Scaffold(containerColor = QBg, topBar = { TopAppBar(
         title = { Column { Text("QuantxDrive", fontWeight = FontWeight.Bold); Text("${total ?: stats?.totalFiles ?: files.size} files", style = MaterialTheme.typography.labelSmall) } },
         navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
@@ -172,7 +184,6 @@ fun QuantxDriveScreen(nav: NavHostController) {
                     }
                 }
             }
-            selectedFile?.let { file -> Surface(Modifier.fillMaxSize(), color = QBg) { QuantxDriveViewerScreen(file, api, { selectedFile = null }) { scope.launch { api.toggleFavorite(file.id); reload() } } } }
         }
     }
 }
