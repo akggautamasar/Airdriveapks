@@ -98,55 +98,71 @@ fun QuantxDriveViewerScreen(file: QuantFile, api: QuantxDriveApi, onBack: () -> 
         }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { setFullscreen(false) }
+    DisposableEffect(type) {
+        val media = type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO
+        QuantxDrivePip.isEnabled = media
+        onDispose {
+            QuantxDrivePip.isEnabled = false
+            setFullscreen(false)
+        }
     }
 
     BackHandler {
         if (fullscreen) setFullscreen(false) else onBack()
     }
 
+    // Fullscreen is deliberately outside Scaffold. The media surface owns every pixel;
+    // the QuantxDrive app bar and other viewer chrome cannot appear in this mode.
+    if (fullscreen && (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (type == QuantViewerType.VIDEO) {
+                RemotePlayer(api.mediaUrl(file.id), file.mime, false, true, ::setFullscreen, api.savedToken)
+            } else {
+                RemotePlayer(api.mediaUrl(file.id), file.mime, true, true, ::setFullscreen, api.savedToken)
+            }
+        }
+        return
+    }
+
     Scaffold(
         containerColor = if (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO) Color.Black else ViewerBg,
         topBar = {
-            if (!fullscreen) {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(file.filename, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                            Text("${formatBytes(file.size)} • ${file.category.ifBlank { "other" }}", style = MaterialTheme.typography.labelSmall)
-                        }
-                    },
-                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
-                    actions = {
-                        IconButton(onClick = onFavorite) { Icon(Icons.Default.Favorite, "Favorite", tint = if (file.favorite) ViewerPurple else MaterialTheme.colorScheme.onSurface) }
-                        IconButton(
-                            enabled = !busy,
-                            onClick = {
-                                busy = true
-                                scope.launch {
-                                    downloadFile(context, api, file).onFailure { error = it.message ?: "Download failed" }
-                                    busy = false
-                                }
-                            }
-                        ) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, "Download") }
-                        IconButton(onClick = {
-                            scope.launch {
-                                api.createShare(file.id).onSuccess { shareText(context, api.sharedStreamUrl(it.token), file.filename) }
-                                    .onFailure { error = it.message ?: "Share failed" }
-                            }
-                        }) { Icon(Icons.Default.Share, "Share") }
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(file.filename, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                        Text("${formatBytes(file.size)} • ${file.category.ifBlank { "other" }}", style = MaterialTheme.typography.labelSmall)
                     }
-                )
-            }
+                },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
+                actions = {
+                    IconButton(onClick = onFavorite) { Icon(Icons.Default.Favorite, "Favorite", tint = if (file.favorite) ViewerPurple else MaterialTheme.colorScheme.onSurface) }
+                    IconButton(
+                        enabled = !busy,
+                        onClick = {
+                            busy = true
+                            scope.launch {
+                                downloadFile(context, api, file).onFailure { error = it.message ?: "Download failed" }
+                                busy = false
+                            }
+                        }
+                    ) { if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, "Download") }
+                    IconButton(onClick = {
+                        scope.launch {
+                            api.createShare(file.id).onSuccess { shareText(context, api.sharedStreamUrl(it.token), file.filename) }
+                                .onFailure { error = it.message ?: "Share failed" }
+                        }
+                    }) { Icon(Icons.Default.Share, "Share") }
+                }
+            )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().then(if (fullscreen) Modifier else Modifier.padding(padding))) {
-            error?.let { if (!fullscreen) Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
             when (type) {
                 QuantViewerType.IMAGE -> RemoteImage(api.mediaUrl(file.id))
-                QuantViewerType.VIDEO -> RemotePlayer(api.mediaUrl(file.id), file.mime, false, fullscreen, ::setFullscreen, api.savedToken)
-                QuantViewerType.AUDIO -> RemotePlayer(api.mediaUrl(file.id), file.mime, true, fullscreen, ::setFullscreen, api.savedToken)
+                QuantViewerType.VIDEO -> RemotePlayer(api.mediaUrl(file.id), file.mime, false, false, ::setFullscreen, api.savedToken)
+                QuantViewerType.AUDIO -> RemotePlayer(api.mediaUrl(file.id), file.mime, true, false, ::setFullscreen, api.savedToken)
                 QuantViewerType.PDF -> RemotePdf(api.mediaUrl(file.id))
                 QuantViewerType.TEXT -> RemoteText(api.mediaUrl(file.id))
                 QuantViewerType.OTHER -> OtherFile(file, api)
