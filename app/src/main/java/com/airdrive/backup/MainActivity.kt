@@ -1,5 +1,6 @@
 package com.airdrive.backup
 
+import android.content.pm.ActivityInfo
 import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import android.os.Handler
