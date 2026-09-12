@@ -2,6 +2,7 @@ package com.airdrive.backup
 
 import android.app.PictureInPictureParams
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
@@ -45,8 +46,18 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        QuantxDrivePip.isInPip.value = isInPictureInPictureMode
+    }
+
     override fun onResume() {
         super.onResume()
+        QuantxDrivePip.isInPip.value = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            isInPictureInPictureMode
+        } else {
+            false
+        }
         val shouldPrompt = !hasResumedOnce || pausedAt == 0L ||
             SystemClock.elapsedRealtime() - pausedAt > 700L
         hasResumedOnce = true
@@ -153,4 +164,9 @@ class MainActivity : FragmentActivity() {
 object QuantxDrivePip {
     @Volatile
     var isEnabled: Boolean = false
+
+    val isInPip = androidx.compose.runtime.mutableStateOf(false)
+
+    @Volatile
+    var isFullscreen: Boolean = false
 }
