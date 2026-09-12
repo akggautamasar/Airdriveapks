@@ -24,45 +24,35 @@ jobs:
           s = manifest.read_text(encoding='utf-8')
           old = '''            android:windowSoftInputMode="adjustResize"\n            android:supportsPictureInPicture="true">'''
           new = '''            android:windowSoftInputMode="adjustResize"\n            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"\n            android:screenOrientation="unspecified"\n            android:supportsPictureInPicture="true">'''
-          if old not in s:
+          if old in s:
+              manifest.write_text(s.replace(old, new, 1), encoding='utf-8')
+          elif 'android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"' not in s:
               raise SystemExit('manifest activity anchor not found')
-          manifest.write_text(s.replace(old, new, 1), encoding='utf-8')
 
           activity = Path('app/src/main/java/com/airdrive/backup/MainActivity.kt')
           s = activity.read_text(encoding='utf-8')
-          s = s.replace('import android.graphics.Color as AndroidColor\n', 'import android.content.pm.ActivityInfo\nimport android.graphics.Color as AndroidColor\n', 1)
+          if 'import android.content.pm.ActivityInfo' not in s:
+              s = s.replace('import android.graphics.Color as AndroidColor\n', 'import android.content.pm.ActivityInfo\nimport android.graphics.Color as AndroidColor\n', 1)
           activity.write_text(s, encoding='utf-8')
 
           viewer = Path('app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt')
           s = viewer.read_text(encoding='utf-8')
-
-          old_import = 'import android.view.View\n'
-          new_import = 'import android.view.View\nimport android.content.pm.ActivityInfo\n'
-          if old_import not in s:
-              raise SystemExit('viewer import anchor not found')
-          s = s.replace(old_import, new_import, 1)
+          if 'import android.content.pm.ActivityInfo' not in s:
+              s = s.replace('import android.view.View\n', 'import android.view.View\nimport android.content.pm.ActivityInfo\n', 1)
 
           old_fn = '''    fun setFullscreen(enabled: Boolean) {\n        fullscreen = enabled\n        val activity = context as? Activity ?: return\n        if (enabled) {\n            activity.window.decorView.systemUiVisibility =\n                View.SYSTEM_UI_FLAG_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or\n                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        } else {\n            activity.window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        }\n    }'''
-          new_fn = '''    fun setFullscreen(enabled: Boolean) {\n        fullscreen = enabled\n        val activity = context as? Activity ?: return\n        if (enabled) {\n            // Video/audio fullscreen is a real immersive landscape mode: no app bar,\n            // no status/navigation bars, and the player owns the entire display.\n            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE\n            activity.window.decorView.systemUiVisibility =\n                View.SYSTEM_UI_FLAG_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or\n                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        } else {\n            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED\n            activity.window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        }\n    }'''
-          if old_fn not in s:
-              raise SystemExit('viewer fullscreen function not found')
-          s = s.replace(old_fn, new_fn, 1)
+          new_fn = '''    fun setFullscreen(enabled: Boolean) {\n        fullscreen = enabled\n        val activity = context as? Activity ?: return\n        if (enabled) {\n            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE\n            activity.window.decorView.systemUiVisibility =\n                View.SYSTEM_UI_FLAG_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or\n                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or\n                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or\n                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        } else {\n            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED\n            activity.window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE\n        }\n    }'''
+          if old_fn in s:
+              s = s.replace(old_fn, new_fn, 1)
+          viewer.write_text(s, encoding='utf-8')
 
-          # Keep the immersive player stable through configuration changes and make the\n          # fullscreen control sit over the actual video instead of the app chrome.\n          old_box = '    Box(Modifier.fillMaxSize().background(Color.Black)) {\n'
-          new_box = '    Box(Modifier.fillMaxSize().background(Color.Black)) {\n'
-          if old_box not in s:
-              raise SystemExit('player box anchor not found')
-
-          # When the user rotates manually while the viewer is open, do not lose the\n          # viewer or return to the file list; AndroidManifest configChanges preserves it.\n          viewer.write_text(s, encoding='utf-8')
-
-      - name: Compile check
+      - name: Verify
         run: |
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
           grep -n "configChanges" app/src/main/AndroidManifest.xml
           grep -n "SCREEN_ORIENTATION_LANDSCAPE" app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
+          grep -n "SCREEN_ORIENTATION_UNSPECIFIED" app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
 
-      - name: Commit changes
+      - name: Commit source changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
