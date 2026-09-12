@@ -41,6 +41,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -140,8 +142,8 @@ fun QuantxDriveViewerScreen(file: QuantFile, api: QuantxDriveApi, onBack: () -> 
             error?.let { if (!fullscreen) Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
             when (type) {
                 QuantViewerType.IMAGE -> RemoteImage(api.mediaUrl(file.id))
-                QuantViewerType.VIDEO -> RemotePlayer(api.mediaUrl(file.id), file.mime, false, fullscreen, ::setFullscreen)
-                QuantViewerType.AUDIO -> RemotePlayer(api.mediaUrl(file.id), file.mime, true, fullscreen, ::setFullscreen)
+                QuantViewerType.VIDEO -> RemotePlayer(api.mediaUrl(file.id), file.mime, false, fullscreen, ::setFullscreen, api.savedToken)
+                QuantViewerType.AUDIO -> RemotePlayer(api.mediaUrl(file.id), file.mime, true, fullscreen, ::setFullscreen, api.savedToken)
                 QuantViewerType.PDF -> RemotePdf(api.mediaUrl(file.id))
                 QuantViewerType.TEXT -> RemoteText(api.mediaUrl(file.id))
                 QuantViewerType.OTHER -> OtherFile(file, api)
@@ -152,35 +154,44 @@ fun QuantxDriveViewerScreen(file: QuantFile, api: QuantxDriveApi, onBack: () -> 
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun RemotePlayer(url: String?, mime: String, audio: Boolean, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit) {
+private fun RemotePlayer(
+    url: String?,
+    mime: String,
+    audio: Boolean,
+    fullscreen: Boolean,
+    onFullscreen: (Boolean) -> Unit,
+    authToken: String?
+) {
     val context = LocalContext.current
     if (url.isNullOrBlank()) { Message("Streaming unavailable"); return }
-    val player = remember(url) { ExoPlayer.Builder(context).build() }
-    var showFullscreenControl by remember(url, fullscreen) { mutableStateOf(true) }
-
-    LaunchedEffect(showFullscreenControl, fullscreen) {
-        if (showFullscreenControl) {
-            delay(3000)
-            showFullscreenControl = false
-        }
+    val httpFactory = remember(authToken) {
+        DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(20_000)
+            .setReadTimeoutMs(120_000)
+            .setAllowCrossProtocolRedirects(true)
+            .setDefaultRequestProperties(
+                buildMap {
+                    put("Accept", "*/*")
+                    authToken?.takeIf { it.isNotBlank() }?.let { put("Authorization", "Bearer $it") }
+                }
+            )
     }
-
+    val player = remember(url, authToken) {
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .build()
+    }
+    var showFullscreenControl by remember(url, fullscreen) { mutableStateOf(true) }
+    LaunchedEffect(showFullscreenControl, fullscreen) {
+        if (showFullscreenControl) { delay(3000); showFullscreenControl = false }
+    }
     DisposableEffect(player, url) {
-        player.setMediaItem(
-            MediaItem.Builder().setUri(Uri.parse(url)).apply {
-                if (mime.isNotBlank()) setMimeType(mime)
-            }.build()
-        )
+        player.setMediaItem(MediaItem.Builder().setUri(Uri.parse(url)).build())
         player.prepare()
         player.playWhenReady = true
         onDispose { player.release() }
     }
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    ) {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -189,10 +200,7 @@ private fun RemotePlayer(url: String?, mime: String, audio: Boolean, fullscreen:
                     controllerAutoShow = true
                     controllerHideOnTouch = true
                     setControllerShowTimeoutMs(3000)
-                    setOnTouchListener { _, _ ->
-                        showFullscreenControl = true
-                        false
-                    }
+                    setOnTouchListener { _, _ -> showFullscreenControl = true; false }
                 }
             },
             update = {
@@ -204,19 +212,13 @@ private fun RemotePlayer(url: String?, mime: String, audio: Boolean, fullscreen:
             },
             modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
         )
-
         if (showFullscreenControl) {
             Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(if (fullscreen) 18.dp else 12.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(if (fullscreen) 18.dp else 12.dp),
                 shape = MaterialTheme.shapes.medium,
                 color = Color.Black.copy(alpha = 0.70f)
             ) {
-                IconButton(onClick = {
-                    showFullscreenControl = true
-                    onFullscreen(!fullscreen)
-                }) {
+                IconButton(onClick = { showFullscreenControl = true; onFullscreen(!fullscreen) }) {
                     Icon(
                         if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
                         contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
