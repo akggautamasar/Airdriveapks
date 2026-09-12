@@ -1,0 +1,81 @@
+name: Patch QuantxDrive viewer
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-viewer-pip.yml'
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Patch viewer
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt')
+          s = p.read_text(encoding='utf-8')
+
+          anchor = '    DisposableEffect(Unit) {\n        onDispose { setFullscreen(false) }\n    }'
+          replacement = '''    DisposableEffect(type) {
+        val media = type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO
+        QuantxDrivePip.isEnabled = media
+        onDispose {
+            QuantxDrivePip.isEnabled = false
+            setFullscreen(false)
+        }
+    }'''
+          if anchor in s:
+              s = s.replace(anchor, replacement, 1)
+          elif 'QuantxDrivePip.isEnabled = media' not in s:
+              raise SystemExit('PIP lifecycle anchor not found')
+
+          # In fullscreen, render the media content directly rather than through a Scaffold.
+          # This guarantees that the QuantxDrive app bar can never occupy the fullscreen surface.
+          old = '''    Scaffold(
+        containerColor = if (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO) Color.Black else ViewerBg,
+        topBar = {
+            if (!fullscreen) {'''
+          new = '''    if (fullscreen && (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (type == QuantViewerType.VIDEO) {
+                RemotePlayer(api.mediaUrl(file.id), file.mime, false, true, ::setFullscreen, api.savedToken)
+            } else {
+                RemotePlayer(api.mediaUrl(file.id), file.mime, true, true, ::setFullscreen, api.savedToken)
+            }
+        }
+        return
+    }
+
+    Scaffold(
+        containerColor = if (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO) Color.Black else ViewerBg,
+        topBar = {'''
+          if old not in s:
+              raise SystemExit('Scaffold anchor not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+
+          # Ensure the Activity can enter PiP and the viewer bridge is present.
+          activity = Path('app/src/main/java/com/airdrive/backup/MainActivity.kt').read_text(encoding='utf-8')
+          if 'QuantxDrivePip' not in activity or 'onUserLeaveHint' not in activity:
+              raise SystemExit('MainActivity PIP support missing')
+
+      - name: Verify and compile
+        run: |
+          grep -n "QuantxDrivePip" app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
+          grep -n "onUserLeaveHint" app/src/main/java/com/airdrive/backup/MainActivity.kt
+          ./gradlew :app:compileDebugKotlin --no-daemon --stacktrace
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/airdrive/backup/quantx/QuantxDriveViewerScreen.kt
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: make media fullscreen video-only and add pip"
+          git push
