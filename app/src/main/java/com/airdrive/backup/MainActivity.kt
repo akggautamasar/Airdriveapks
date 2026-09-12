@@ -1,7 +1,6 @@
 package com.airdrive.backup
 
 import android.app.PictureInPictureParams
-import android.app.PictureInPictureUiState
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color as AndroidColor
@@ -44,8 +43,6 @@ class MainActivity : FragmentActivity() {
                     .build()
                 val entered = enterPictureInPictureMode(params)
                 if (entered) {
-                    // Switch Compose to the player-only layout immediately so the
-                    // PiP animation never captures the QuantxDrive header/chrome.
                     QuantxDrivePip.isInPip.value = true
                 }
             }
@@ -55,15 +52,6 @@ class MainActivity : FragmentActivity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         QuantxDrivePip.isInPip.value = isInPictureInPictureMode
-    }
-
-    override fun onPictureInPictureUiStateChanged(pipState: PictureInPictureUiState) {
-        super.onPictureInPictureUiStateChanged(pipState)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && pipState.isTransitioningToPip()) {
-            // Android 15 calls this at the start of the PiP animation. Hide all
-            // non-video UI before the system snapshots the Activity into PiP.
-            QuantxDrivePip.isInPip.value = true
-        }
     }
 
     override fun onResume() {
