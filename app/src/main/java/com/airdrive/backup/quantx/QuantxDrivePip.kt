@@ -1,14 +1,20 @@
 package com.airdrive.backup.quantx
 
 /**
- * Package-local bridge to the PiP state owned by MainActivity.
- * Keeping this bridge in the Quantx package lets the viewer toggle PiP
- * without coupling its package to Activity implementation details.
+ * Package-local bridge to the PiP/fullscreen state owned by MainActivity.
  */
 object QuantxDrivePip {
     var isEnabled: Boolean
         get() = com.airdrive.backup.QuantxDrivePip.isEnabled
         set(value) {
             com.airdrive.backup.QuantxDrivePip.isEnabled = value
+        }
+
+    val isInPip = com.airdrive.backup.QuantxDrivePip.isInPip
+
+    var isFullscreen: Boolean
+        get() = com.airdrive.backup.QuantxDrivePip.isFullscreen
+        set(value) {
+            com.airdrive.backup.QuantxDrivePip.isFullscreen = value
         }
 }
