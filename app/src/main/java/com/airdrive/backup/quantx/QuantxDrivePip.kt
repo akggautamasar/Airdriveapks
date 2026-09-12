@@ -6,7 +6,6 @@ package com.airdrive.backup.quantx
  * without coupling its package to Activity implementation details.
  */
 object QuantxDrivePip {
-    @Volatile
     var isEnabled: Boolean
         get() = com.airdrive.backup.QuantxDrivePip.isEnabled
         set(value) {
