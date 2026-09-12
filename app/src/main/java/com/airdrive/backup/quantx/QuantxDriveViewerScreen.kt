@@ -78,10 +78,13 @@ fun QuantxDriveViewerScreen(file: QuantFile, api: QuantxDriveApi, onBack: () -> 
     val type = remember(file.id) { quantViewerType(file) }
     var busy by remember(file.id) { mutableStateOf(false) }
     var error by remember(file.id) { mutableStateOf<String?>(null) }
-    var fullscreen by remember(file.id) { mutableStateOf(false) }
+    var fullscreen by remember(file.id) { mutableStateOf(QuantxDrivePip.isFullscreen) }
+    val isPip by QuantxDrivePip.isInPip
+    val isMedia = type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO
 
     fun setFullscreen(enabled: Boolean) {
         fullscreen = enabled
+        QuantxDrivePip.isFullscreen = enabled
         val activity = context as? Activity ?: return
         if (enabled) {
             activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -99,33 +102,53 @@ fun QuantxDriveViewerScreen(file: QuantFile, api: QuantxDriveApi, onBack: () -> 
     }
 
     DisposableEffect(type) {
-        val media = type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO
-        QuantxDrivePip.isEnabled = media
+        QuantxDrivePip.isEnabled = isMedia
         onDispose {
             QuantxDrivePip.isEnabled = false
+            QuantxDrivePip.isFullscreen = false
             setFullscreen(false)
         }
     }
 
-    BackHandler {
+    BackHandler(enabled = !isPip) {
         if (fullscreen) setFullscreen(false) else onBack()
+    }
+
+    // PiP must contain only the player. The Activity is still the same Activity,
+    // so Compose explicitly removes the QuantxDrive app bar/chrome while in PiP.
+    if (isPip && isMedia) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            RemotePlayer(
+                api.mediaUrl(file.id),
+                file.mime,
+                type == QuantViewerType.AUDIO,
+                true,
+                ::setFullscreen,
+                api.savedToken,
+                showFullscreenButton = false
+            )
+        }
+        return
     }
 
     // Fullscreen is deliberately outside Scaffold. The media surface owns every pixel;
     // the QuantxDrive app bar and other viewer chrome cannot appear in this mode.
-    if (fullscreen && (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO)) {
+    if (fullscreen && isMedia) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            if (type == QuantViewerType.VIDEO) {
-                RemotePlayer(api.mediaUrl(file.id), file.mime, false, true, ::setFullscreen, api.savedToken)
-            } else {
-                RemotePlayer(api.mediaUrl(file.id), file.mime, true, true, ::setFullscreen, api.savedToken)
-            }
+            RemotePlayer(
+                api.mediaUrl(file.id),
+                file.mime,
+                type == QuantViewerType.AUDIO,
+                true,
+                ::setFullscreen,
+                api.savedToken
+            )
         }
         return
     }
 
     Scaffold(
-        containerColor = if (type == QuantViewerType.VIDEO || type == QuantViewerType.AUDIO) Color.Black else ViewerBg,
+        containerColor = if (isMedia) Color.Black else ViewerBg,
         topBar = {
             TopAppBar(
                 title = {
@@ -179,7 +202,8 @@ private fun RemotePlayer(
     audio: Boolean,
     fullscreen: Boolean,
     onFullscreen: (Boolean) -> Unit,
-    authToken: String?
+    authToken: String?,
+    showFullscreenButton: Boolean = true
 ) {
     val context = LocalContext.current
     if (url.isNullOrBlank()) { Message("Streaming unavailable"); return }
@@ -200,9 +224,9 @@ private fun RemotePlayer(
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build()
     }
-    var showFullscreenControl by remember(url, fullscreen) { mutableStateOf(true) }
-    LaunchedEffect(showFullscreenControl, fullscreen) {
-        if (showFullscreenControl) { delay(3000); showFullscreenControl = false }
+    var showFullscreenControl by remember(url, fullscreen, showFullscreenButton) { mutableStateOf(showFullscreenButton) }
+    LaunchedEffect(showFullscreenControl, fullscreen, showFullscreenButton) {
+        if (showFullscreenControl && showFullscreenButton) { delay(3000); showFullscreenControl = false }
     }
     DisposableEffect(player, url) {
         player.setMediaItem(MediaItem.Builder().setUri(Uri.parse(url)).build())
@@ -229,9 +253,11 @@ private fun RemotePlayer(
                 it.controllerHideOnTouch = true
                 it.setControllerShowTimeoutMs(3000)
             },
-            modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
+            modifier = Modifier.fillMaxSize().let {
+                if (fullscreen) it else Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
+            }
         )
-        if (showFullscreenControl) {
+        if (showFullscreenButton && showFullscreenControl) {
             Surface(
                 modifier = Modifier.align(Alignment.TopEnd).padding(if (fullscreen) 18.dp else 12.dp),
                 shape = MaterialTheme.shapes.medium,
