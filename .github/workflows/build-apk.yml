@@ -15,9 +15,6 @@ concurrency:
   group: build-apk
   cancel-in-progress: false
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,35 +22,6 @@ jobs:
     steps:
       - name: Checkout AirDrive
         uses: actions/checkout@v4
-
-      - name: Repair QuantxDrive viewer host
-        run: |
-          set -e
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("app/src/main/java/com/airdrive/backup/quantx/QuantxDriveScreen.kt")
-          text = path.read_text()
-
-          needle = '    Scaffold(containerColor = QBg, topBar = { TopAppBar(\n'
-          insert = '''    // The viewer must leave the QuantxDrive list Scaffold completely.\n    // Otherwise the parent TopAppBar remains visible over fullscreen/PiP media.\n    selectedFile?.let { file ->\n        QuantxDriveViewerScreen(\n            file = file,\n            api = api,\n            onBack = { selectedFile = null },\n            onFavorite = { scope.launch { api.toggleFavorite(file.id); reload() } }\n        )\n        return\n    }\n\n'''
-          if needle not in text:
-              raise SystemExit("viewer host insertion point not found")
-          text = text.replace(needle, insert + needle, 1)
-
-          old_overlay = '            selectedFile?.let { file -> Surface(Modifier.fillMaxSize(), color = QBg) { QuantxDriveViewerScreen(file, api, { selectedFile = null }) { scope.launch { api.toggleFavorite(file.id); reload() } } } }\n'
-          if old_overlay not in text:
-              raise SystemExit("old viewer overlay not found")
-          text = text.replace(old_overlay, '', 1)
-
-          path.write_text(text)
-          PY
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/airdrive/backup/quantx/QuantxDriveScreen.kt
-          git commit -m "fix: render QuantxDrive viewer outside parent scaffold"
-          git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
