@@ -49,12 +49,9 @@ jobs:
           path.write_text(text)
           PY
 
-          # Restore this workflow file in the same commit so this is a one-time repair.
-          git show HEAD^:.github/workflows/build-apk.yml > .github/workflows/build-apk.yml
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/airdrive/backup/quantx/QuantxDriveScreen.kt .github/workflows/build-apk.yml
+          git add app/src/main/java/com/airdrive/backup/quantx/QuantxDriveScreen.kt
           git commit -m "fix: render QuantxDrive viewer outside parent scaffold"
           git push origin HEAD:${GITHUB_REF_NAME}
 
