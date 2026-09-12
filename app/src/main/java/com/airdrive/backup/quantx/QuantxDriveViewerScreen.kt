@@ -43,6 +43,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -155,6 +156,15 @@ private fun RemotePlayer(url: String?, mime: String, audio: Boolean, fullscreen:
     val context = LocalContext.current
     if (url.isNullOrBlank()) { Message("Streaming unavailable"); return }
     val player = remember(url) { ExoPlayer.Builder(context).build() }
+    var showFullscreenControl by remember(url, fullscreen) { mutableStateOf(true) }
+
+    LaunchedEffect(showFullscreenControl, fullscreen) {
+        if (showFullscreenControl) {
+            delay(3000)
+            showFullscreenControl = false
+        }
+    }
+
     DisposableEffect(player, url) {
         player.setMediaItem(
             MediaItem.Builder().setUri(Uri.parse(url)).apply {
@@ -165,33 +175,54 @@ private fun RemotePlayer(url: String?, mime: String, audio: Boolean, fullscreen:
         player.playWhenReady = true
         onDispose { player.release() }
     }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Column(Modifier.fillMaxSize()) {
-            AndroidView(
-                factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
-                update = { it.player = player },
-                modifier = Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
-            )
-            if (!fullscreen) {
-                Text(
-                    if (audio) "Audio streaming" else "Video streaming",
-                    color = Color.White,
-                    modifier = Modifier.padding(16.dp),
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
-        Surface(
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-            shape = MaterialTheme.shapes.medium,
-            color = Color.Black.copy(alpha = 0.65f)
-        ) {
-            IconButton(onClick = { onFullscreen(!fullscreen) }) {
-                Icon(
-                    if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                    contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
-                    tint = Color.White
-                )
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    this.player = player
+                    useController = true
+                    controllerAutoShow = true
+                    controllerHideOnTouch = true
+                    setControllerShowTimeoutMs(3000)
+                    setOnTouchListener { _, _ ->
+                        showFullscreenControl = true
+                        false
+                    }
+                }
+            },
+            update = {
+                it.player = player
+                it.useController = true
+                it.controllerAutoShow = true
+                it.controllerHideOnTouch = true
+                it.setControllerShowTimeoutMs(3000)
+            },
+            modifier = if (fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(if (audio) 1.35f else 1.777f)
+        )
+
+        if (showFullscreenControl) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(if (fullscreen) 18.dp else 12.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = Color.Black.copy(alpha = 0.70f)
+            ) {
+                IconButton(onClick = {
+                    showFullscreenControl = true
+                    onFullscreen(!fullscreen)
+                }) {
+                    Icon(
+                        if (fullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                        contentDescription = if (fullscreen) "Exit full screen" else "Full screen",
+                        tint = Color.White
+                    )
+                }
             }
         }
     }
