@@ -190,8 +190,11 @@ fun FolderSelectionScreen(nav: NavHostController, excluding: Boolean = false) {
                                             // persisted, or whose provider has gone; that must not
                                             // leave a row the user cannot get rid of.
                                             runCatching {
+                                                // Same mask as the take above: the public API only
+                                                // has releasePersistableUriPermission(uri, modeFlags).
                                                 context.contentResolver.releasePersistableUriPermission(
-                                                    android.net.Uri.parse(value)
+                                                    android.net.Uri.parse(value),
+                                                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                                                 )
                                             }
                                         }
