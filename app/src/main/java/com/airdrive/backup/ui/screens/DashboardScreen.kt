@@ -39,6 +39,7 @@ import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.data.repo.BackupRepository
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.DeviceState
+import com.airdrive.backup.util.Format
 import com.airdrive.backup.util.StorageAccess
 import com.airdrive.backup.work.WorkScheduler
 import java.text.SimpleDateFormat
@@ -170,11 +171,11 @@ fun DashboardScreen(nav: NavHostController) {
 
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    StatCard(uploadedCount.toString(), "Files backed up", AirGreen, AirGreenLight, Modifier.weight(1f))
-                    StatCard(pendingCount.toString(), "Pending", AirOrange, AirOrangeLight, Modifier.weight(1f))
+                    StatCard(Format.count(uploadedCount), "Files backed up", AirGreen, AirGreenLight, Modifier.weight(1f))
+                    StatCard(Format.count(pendingCount), "Pending", AirOrange, AirOrangeLight, Modifier.weight(1f))
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    StatCard(failedCount.toString(), "Failed", AirRed, AirRedLight, Modifier.weight(1f))
+                    StatCard(Format.count(failedCount), "Failed", AirRed, AirRedLight, Modifier.weight(1f))
                     StatCard(formatBytes(uploadedBytes), "Storage used", AirPurple, AirPurpleLight, Modifier.weight(1f))
                 }
             }

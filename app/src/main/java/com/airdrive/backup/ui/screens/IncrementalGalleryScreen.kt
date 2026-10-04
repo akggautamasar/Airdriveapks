@@ -48,19 +48,20 @@ fun IncrementalGalleryScreen(nav: NavHostController, initialKind: String = "all"
     val dao = remember { AppDatabase.get(context).fileRecordDao() }
     val gridState = rememberLazyGridState()
     var kind by remember(initialKind) { mutableStateOf(when (initialKind.lowercase()) { "photos" -> GalleryKind.PHOTOS; "videos" -> GalleryKind.VIDEOS; else -> GalleryKind.ALL }) }
-    var onlyBackedUp by remember { mutableStateOf(false) }
+    /** "" for every file, otherwise an UploadStatus name the grid is narrowed to. */
+    var statusFilter by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
     var searchVisible by remember { mutableStateOf(false) }
     var limit by remember { mutableIntStateOf(GALLERY_PAGE) }
     var loadingMore by remember { mutableStateOf(false) }
     val categoryNames = remember(kind) { kind.categories.map { it.name } }
-    val categoryName = if (kind == GalleryKind.PHOTOS) BackupCategory.PHOTOS.name else if (kind == GalleryKind.VIDEOS) BackupCategory.VIDEOS.name else ""
-    val files by remember(categoryNames, query, onlyBackedUp, limit) { dao.galleryFlow(categoryNames, query.trim(), onlyBackedUp, limit) }.collectAsState(initial = emptyList())
-    val total by remember(categoryNames, onlyBackedUp) { dao.galleryCountFlow(categoryNames, onlyBackedUp) }.collectAsState(initial = 0)
-    val uploadedCount by remember(categoryName) { dao.searchCountFlow("", categoryName, "UPLOADED", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
-    val pendingCount by remember(categoryName) { dao.searchCountFlow("", categoryName, "PENDING", "", "", 0L, 0L, 0L, 0L, 0L) }.collectAsState(initial = 0)
+    val files by remember(categoryNames, query, statusFilter, limit) { dao.galleryFlow(categoryNames, query.trim(), statusFilter, limit) }.collectAsState(initial = emptyList())
+    val total by remember(categoryNames, statusFilter) { dao.galleryCountFlow(categoryNames, statusFilter) }.collectAsState(initial = 0)
+    val allCount by remember(categoryNames) { dao.galleryCountFlow(categoryNames, "") }.collectAsState(initial = 0)
+    val uploadedCount by remember(categoryNames) { dao.galleryCountFlow(categoryNames, "UPLOADED") }.collectAsState(initial = 0)
+    val pendingCount by remember(categoryNames) { dao.galleryCountFlow(categoryNames, "PENDING") }.collectAsState(initial = 0)
 
-    LaunchedEffect(kind, onlyBackedUp, query) { limit = GALLERY_PAGE; loadingMore = false; gridState.scrollToItem(0) }
+    LaunchedEffect(kind, statusFilter, query) { limit = GALLERY_PAGE; loadingMore = false; gridState.scrollToItem(0) }
     LaunchedEffect(files.size, limit, total) { if (files.size >= minOf(limit, total) || files.size >= total) loadingMore = false }
     LaunchedEffect(gridState, files.size, total) { snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.collect { lastIndex -> if (lastIndex >= (files.size - LOAD_AHEAD).coerceAtLeast(0) && !loadingMore && files.size < total) { loadingMore = true; limit += GALLERY_PAGE } } }
     DisposableEffect(Unit) { onDispose { MediaThumbnails.trim() } }
@@ -74,12 +75,17 @@ fun IncrementalGalleryScreen(nav: NavHostController, initialKind: String = "all"
             )
             if (searchVisible) OutlinedTextField(value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp), leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search photos and videos") }, shape = RoundedCornerShape(16.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GalleryStatusChip("All", total, !onlyBackedUp, Purple) { onlyBackedUp = false }
-                GalleryStatusChip("Uploaded", uploadedCount, onlyBackedUp, Green) { onlyBackedUp = true }
-                GalleryStatusChip("Pending", pendingCount, false, Orange) { onlyBackedUp = false }
+                GalleryStatusChip("All", allCount, statusFilter.isEmpty(), Purple) { statusFilter = "" }
+                GalleryStatusChip("Uploaded", uploadedCount, statusFilter == "UPLOADED", Green) { statusFilter = "UPLOADED" }
+                GalleryStatusChip("Pending", pendingCount, statusFilter == "PENDING", Orange) { statusFilter = "PENDING" }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { GalleryTab("All", kind == GalleryKind.ALL) { kind = GalleryKind.ALL }; GalleryTab("Photos", kind == GalleryKind.PHOTOS) { kind = GalleryKind.PHOTOS }; GalleryTab("Videos", kind == GalleryKind.VIDEOS) { kind = GalleryKind.VIDEOS } }
-            if (files.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(if (query.isBlank()) "No photos or videos found" else "No media matches that search", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (files.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(when {
+                query.isNotBlank() -> "No media matches that search"
+                statusFilter == "PENDING" -> "Nothing is waiting to be backed up"
+                statusFilter == "UPLOADED" -> "Nothing here has reached Telegram yet"
+                else -> "No photos or videos found"
+            }, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             else LazyVerticalGrid(columns = GridCells.Fixed(3), state = gridState, modifier = Modifier.weight(1f).padding(horizontal = 10.dp), contentPadding = PaddingValues(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(files, key = { it.id }) { record -> IncrementalMediaCell(record) { nav.navigate("${Routes.FILE_VIEWER}/${record.id}") } }
                 if (loadingMore) item { Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) } }

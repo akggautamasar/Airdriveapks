@@ -56,6 +56,7 @@ object Routes {
     const val STORAGE_ACCESS = "storage_access"
     const val STORAGE_ACCESS_ONBOARDING = "storage_access_onboarding"
     const val FOLDER_SELECT = "folder_select"
+    const val FOLDER_EXCLUDE = "folder_exclude"
     const val READY = "ready"
     const val DASHBOARD = "dashboard"
     const val BACKUP_PROGRESS = "backup_progress"
@@ -131,6 +132,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.STORAGE_ACCESS) { StorageAccessScreen(navController, onboarding = false) }
             composable(Routes.STORAGE_ACCESS_ONBOARDING) { StorageAccessScreen(navController, onboarding = true) }
             composable(Routes.FOLDER_SELECT) { FolderSelectionScreen(navController) }
+            composable(Routes.FOLDER_EXCLUDE) { FolderSelectionScreen(navController, excluding = true) }
             composable(Routes.READY) { ReadyScreen(navController) }
             composable(Routes.DASHBOARD) { DashboardScreen(navController) }
             composable(Routes.BACKUP_PROGRESS) { BackupProgressScreen(navController) }

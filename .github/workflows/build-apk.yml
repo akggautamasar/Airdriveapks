@@ -29,8 +29,24 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # android-actions/setup-android@v3 died ~8s into the job once the runners were forced
+      # onto Node 24, so the SDK now comes from the runner image, with sdkmanager as a
+      # fallback only when the pieces this build needs are missing.
+      - name: Use the Android SDK from the runner image
+        run: |
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          test -d "$SDK" || { echo "::error::no Android SDK at $SDK on this runner image"; exit 1; }
+          if [ ! -d "$SDK/platforms/android-34" ] || [ ! -d "$SDK/build-tools/34.0.0" ]; then
+            MGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+            test -x "$MGR" || MGR=$(find "$SDK" -type f -name sdkmanager -path "*/bin/*" | head -1)
+            test -n "$MGR" || { echo "::error::sdkmanager not found under $SDK"; exit 1; }
+            yes | "$MGR" --licenses >/dev/null 2>&1 || true
+            "$MGR" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          fi
+          ls "$SDK/platforms" "$SDK/build-tools"
 
       - name: Resolve tdlib/td commit
         id: tdlib_ref
@@ -141,14 +157,29 @@ jobs:
           restore-keys: |
             gradle-
 
+      # Job logs are only reachable from the Actions UI, so anything that goes wrong is
+      # repeated here as a check annotation, which the API can read.
       - name: Build debug APK
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: |
-          ./gradlew assembleDebug \
-            -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
-            -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}"
+          # The default shell is bash -e, so the build has to be the condition of an if:
+          # a bare failing command would end the step before anything could be reported.
+          if ./gradlew assembleDebug --console=plain --stacktrace \
+              -PTELEGRAM_API_ID="${TELEGRAM_API_ID:-0}" \
+              -PTELEGRAM_API_HASH="${TELEGRAM_API_HASH:-}" > gradle-debug.log 2>&1; then
+            grep -c "^w: " gradle-debug.log || true
+          else
+            status=$?
+            tail -40 gradle-debug.log
+            ERR=$(grep -E "^e: |FAILURE: |Execution failed for |> Task .* FAILED|error:" gradle-debug.log \
+              | tail -30 | tr '\n' '|' | tr -d '\r' | sed 's/::/-/g' || true)
+            echo "::error::assembleDebug failed (exit $status): ${ERR:0:1900}"
+            exit "$status"
+          fi
+          ls -l app/build/outputs/apk/debug/
+          grep -E "^w: " gradle-debug.log | tail -8 || true
 
       - name: Build signed release APK
         if: steps.release_signing.outputs.enabled == 'true'
@@ -180,3 +211,15 @@ jobs:
           name: AirDrive-release-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # Whatever step dies, this repeats the build log here: annotations are readable over the
+      # API, whereas the job log endpoint behind the Actions UI is not reachable from every sandbox.
+      - name: Report the build log on failure
+        if: failure()
+        run: |
+          for f in gradle-debug.log gradle-release.log; do
+            if [ -s "$f" ]; then
+              BODY=$(tail -50 "$f" | tr '\n' '|' | tr -d '\r' | sed 's/::/-/g' || true)
+              echo "::error::$f: ${BODY:0:1900}"
+            fi
+          done
