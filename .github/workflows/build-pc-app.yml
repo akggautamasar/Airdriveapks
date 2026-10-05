@@ -46,12 +46,18 @@ jobs:
       - name: Build the desktop distribution
         shell: bash
         run: |
+          set +e
           sh gradlew --no-daemon -p desktop installDist distZip > pc-build.log 2>&1
           status=$?
+          set -e
+          # Gradle's "What went wrong" block is at the end of the log, and the log itself is only
+          # readable in the Actions UI, so both the compiler lines and the tail come back as
+          # annotations - one look at the failed run is enough to fix it.
+          ERR=$(grep -E "^e: |^error:|Unresolved reference" pc-build.log | head -30 | tr '\n' '|' | sed 's/::/-/g' || true)
+          TAIL=$(tail -25 pc-build.log | tr '\n' '|' | sed 's/::/-/g' || true)
           if [ "$status" -ne 0 ]; then
-            tail -60 pc-build.log
-            ERR=$(grep -E "^e: |FAILURE: |error:|Unresolved" pc-build.log | tail -30 | tr '\n' '|' | sed 's/::/-/g' || true)
-            echo "::error::desktop build failed (exit $status): ${ERR:0:1900}"
+            echo "::error::compile errors: ${ERR:0:1900}"
+            echo "::error::log tail (exit $status): ${TAIL:0:1900}"
             exit "$status"
           fi
           ls -l desktop/build/distributions desktop/build/install/airdrive-pc/lib
