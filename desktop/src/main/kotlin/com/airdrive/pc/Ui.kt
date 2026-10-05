@@ -151,7 +151,8 @@ class Ui(private val seed: Cli) {
     private fun addFolder() {
         val chooser = JFileChooser(lastUsed())
         chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-        chooser.isAcceptAllFileFilterUsed = false
+        // The setter has no matching getter, so there is no property to assign to.
+        chooser.setAcceptAllFileFilterUsed(false)
         chooser.dialogTitle = "Choose a folder to back up"
         if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
             val picked = chooser.selectedFile.toPath().toAbsolutePath().normalize().toString()
@@ -175,7 +176,7 @@ class Ui(private val seed: Cli) {
     private fun chooseDestination() {
         val chooser = JFileChooser(lastUsed())
         chooser.fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
-        chooser.isAcceptAllFileFilterUsed = false
+        chooser.setAcceptAllFileFilterUsed(false)
         chooser.dialogTitle = "Choose where the copies go"
         if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
             destination.text = chooser.selectedFile.toAbsolutePath().toString()

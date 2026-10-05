@@ -50,7 +50,13 @@ class Report {
             Fmt.bytes(bytes.get()) + ") | " + Fmt.count(unchanged.get()) + " already backed up | " +
             Fmt.count(skipped.get()) + " skipped | " + Fmt.count(failed.get()) + " failed"
 
-    fun tail(limit: Int): List<String> = lines.takeLast(limit)
+    /** The newest few notes, oldest first. A queue copy, no collection extensions to resolve. */
+    fun tail(limit: Int): List<String> {
+        val all = ArrayList<String>()
+        for (line in lines) all.add(line)
+        if (all.size <= limit) return all
+        return ArrayList(all.subList(all.size - limit, all.size))
+    }
 }
 
 object Fmt {
@@ -122,7 +128,7 @@ class Manifest(private val file: Path) {
         try {
             Files.createDirectories(parent)
             val tmp = file.resolveSibling(file.fileName.toString() + ".part")
-            tmp.bufferedWriter(Charsets.UTF_8).use { writer ->
+            Files.newBufferedWriter(tmp, Charsets.UTF_8).use { writer ->
                 rows.forEach { (key, entry) ->
                     writer.write(entry.stored + "\t" + entry.size + "\t" + entry.modifiedMillis + "\t" + key)
                     writer.newLine()
