@@ -179,7 +179,7 @@ class Ui(private val seed: Cli) {
         chooser.setAcceptAllFileFilterUsed(false)
         chooser.setDialogTitle("Choose where the copies go")
         if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
-            destination.text = chooser.selectedFile.toAbsolutePath().toString()
+            destination.text = chooser.selectedFile.absolutePath
         }
     }
 
