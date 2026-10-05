@@ -30,6 +30,7 @@ import com.airdrive.backup.data.prefs.NetworkPolicy
 import com.airdrive.backup.data.prefs.SettingsStore
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.ui.theme.ThemeMode
+import com.airdrive.backup.work.WorkScheduler
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,10 +94,16 @@ fun NetworkSettingsScreen(nav: NavHostController) {
     val settings = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
     val policy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
+
+    /** Saves the policy and then rebuilds the periodic run from it. The scheduled work carries the
+     *  network constraints, so skipping the reschedule leaves uploads running under the old policy
+     *  until some other backup setting happens to be touched. */
+    fun savePolicy(next: NetworkPolicy) = scope.launch { settings.setNetworkPolicy(next); WorkScheduler.rescheduleAutoBackup(context) }
+
     PreferenceScaffold("Network", "Control when AirDrive may upload", nav) {
-        NetworkRow("Wi-Fi only", "Safest for mobile data", NetworkPolicy.WIFI_ONLY, policy, Icons.Default.Wifi) { scope.launch { settings.setNetworkPolicy(it) } }
-        NetworkRow("Wi-Fi + mobile, no roaming", "Use cellular data but avoid roaming", NetworkPolicy.NOT_ROAMING, policy, Icons.Default.Wifi) { scope.launch { settings.setNetworkPolicy(it) } }
-        NetworkRow("Any connection", "Wi-Fi, mobile data and roaming", NetworkPolicy.ANY, policy, Icons.Default.WifiOff) { scope.launch { settings.setNetworkPolicy(it) } }
+        NetworkRow("Wi-Fi only", "Safest for mobile data", NetworkPolicy.WIFI_ONLY, policy, Icons.Default.Wifi) { savePolicy(it) }
+        NetworkRow("Wi-Fi + mobile, no roaming", "Use cellular data but avoid roaming", NetworkPolicy.NOT_ROAMING, policy, Icons.Default.Wifi) { savePolicy(it) }
+        NetworkRow("Any connection", "Wi-Fi, mobile data and roaming", NetworkPolicy.ANY, policy, Icons.Default.WifiOff) { savePolicy(it) }
         Text("These settings affect automatic backup uploads. They do not change Telegram's own network behaviour.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         TextButton(onClick = { nav.navigate(Routes.BACKUP_SETTINGS) }) { Text("Open full Backup settings") }
     }

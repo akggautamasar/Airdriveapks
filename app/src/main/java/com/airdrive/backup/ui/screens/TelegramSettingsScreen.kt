@@ -26,7 +26,9 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.airdrive.backup.data.prefs.DestinationMode
 import com.airdrive.backup.data.prefs.SettingsStore
+import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.ui.nav.Routes
+import kotlinx.coroutines.launch
 
 private val Blue = Color(0xFF2F6FEA)
 private val BlueLight = Color(0xFFEAF2FF)
@@ -44,8 +46,20 @@ fun TelegramSettingsScreen(nav: NavHostController) {
     val loggedIn by settings.telegramLoggedIn.collectAsState(initial = false)
     val destination by settings.destination.collectAsState(initial = null)
     val mode by settings.destinationMode.collectAsState(initial = null)
+    val tdClient = remember { TdClient.get(context) }
+    val scope = rememberCoroutineScope()
     var testing by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<String?>(null) }
+
+    /** Asks TDLib whether a session is actually usable instead of claiming a check ran. */
+    fun checkConnection() {
+        scope.launch {
+            testing = true
+            val ready = tdClient.awaitReady(15_000)
+            result = if (ready) "Connection is active — Telegram is ready for uploads." else "Telegram is not ready yet. Open the sign-in screen and connect again."
+            testing = false
+        }
+    }
 
     Scaffold(
         containerColor = Background,
@@ -89,11 +103,12 @@ fun TelegramSettingsScreen(nav: NavHostController) {
                     )
                     Spacer(Modifier.height(12.dp))
                     Button(
-                        onClick = { if (loggedIn) { testing = true; result = "Connection check started…"; testing = false } else nav.navigate(Routes.TELEGRAM_LOGIN) },
+                        onClick = { if (loggedIn) checkConnection() else nav.navigate(Routes.TELEGRAM_LOGIN) },
+                        enabled = !testing,
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(15.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Blue)
-                    ) { Icon(if (loggedIn) Icons.Default.Refresh else Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (loggedIn) "Check connection" else "Connect Telegram") }
+                    ) { Icon(if (loggedIn) Icons.Default.Refresh else Icons.Default.Send, null); Spacer(Modifier.width(8.dp)); Text(if (testing) "Checking…" else if (loggedIn) "Check connection" else "Connect Telegram") }
                 }
             }
 
@@ -104,7 +119,7 @@ fun TelegramSettingsScreen(nav: NavHostController) {
                     nav.navigate(if (loggedIn) Routes.API_CREDENTIALS else Routes.TELEGRAM_LOGIN)
                 }
                 TelegramRow("Connection status", if (loggedIn) "Connected" else "Not connected", Icons.Default.CheckCircle, Green, GreenLight) {
-                    if (loggedIn) { testing = true; result = "Connection is active."; testing = false } else nav.navigate(Routes.TELEGRAM_LOGIN)
+                    if (loggedIn) checkConnection() else nav.navigate(Routes.TELEGRAM_LOGIN)
                 }
             }
 

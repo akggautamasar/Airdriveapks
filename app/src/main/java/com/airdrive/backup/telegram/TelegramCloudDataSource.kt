@@ -61,7 +61,14 @@ class TelegramCloudDataSource(
             }
 
             val chunkStart = (at / chunkSize) * chunkSize
-            val chunkLength = minOf(chunkSize.toLong(), (knownLength - chunkStart).coerceAtLeast(0L)).toInt()
+            // knownLength <= 0 means the size was never recorded (open() treats it as LENGTH_UNSET).
+            // Clamping a chunk against an unknown length asks for zero bytes, which reads as the end
+            // of the file on the very first read, so such a stream could never play at all.
+            val chunkLength = if (knownLength > 0L) {
+                minOf(chunkSize.toLong(), (knownLength - chunkStart).coerceAtLeast(0L)).toInt()
+            } else {
+                chunkSize
+            }
             if (chunkLength <= 0) break
             val bytes = try {
                 runBlocking(Dispatchers.IO) {

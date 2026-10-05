@@ -341,9 +341,11 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    /** Cleaned the same way as [addExcludedPath], since that is how the stored value reads. */
     suspend fun removeExcludedPath(fragment: String) {
+        val clean = fragment.trim().trimEnd('/').lowercase()
         context.dataStore.edit { prefs ->
-            prefs[Keys.EXCLUDED_PATHS] = (prefs[Keys.EXCLUDED_PATHS] ?: emptySet()) - fragment
+            prefs[Keys.EXCLUDED_PATHS] = (prefs[Keys.EXCLUDED_PATHS] ?: emptySet()) - clean
         }
     }
 

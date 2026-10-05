@@ -19,6 +19,8 @@ interface FileRecordDao {
     @Update suspend fun update(record: FileRecord)
     @Query("SELECT * FROM file_records WHERE fingerprint = :fingerprint LIMIT 1") suspend fun findByFingerprint(fingerprint: String): FileRecord?
     @Query("SELECT * FROM file_records WHERE uri = :uri LIMIT 1") suspend fun findByUri(uri: String): FileRecord?
+    /** The whole row for one id. Callers that already know the id must not scan the table for it. */
+    @Query("SELECT * FROM file_records WHERE id = :id") suspend fun findById(id: Long): FileRecord?
     @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY addedAtMillis ASC") suspend fun pendingFiles(): List<FileRecord>
     @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY addedAtMillis ASC LIMIT :limit") suspend fun nextPendingBatch(limit: Int): List<FileRecord>
     @Query("SELECT * FROM file_records WHERE status = 'PENDING' ORDER BY modifiedAtMillis DESC LIMIT :limit") suspend fun nextPendingNewest(limit: Int): List<FileRecord>
@@ -59,7 +61,8 @@ interface FileRecordDao {
     @Query("UPDATE file_records SET destinationChannelId = :channelId WHERE category = :category AND status != 'UPLOADED'") suspend fun repointCategory(category: BackupCategory, channelId: Long)
     @Query("DELETE FROM file_records WHERE status != 'UPLOADED' AND uri LIKE 'content://%'") suspend fun deleteUnsentSafRows(): Int
     @Query("UPDATE file_records SET status = 'CANCELLED', lastError = NULL WHERE id = :id") suspend fun markCancelled(id: Long)
-    @Query("SELECT * FROM file_records WHERE status = 'CANCELLED' ORDER BY addedAtMillis DESC") fun cancelledFilesFlow(): Flow<List<FileRecord>>
+    /** Bounded on purpose: a cancelled sweep over a whole device can be tens of thousands of rows. */
+    @Query("SELECT * FROM file_records WHERE status = 'CANCELLED' ORDER BY addedAtMillis DESC LIMIT :limit") fun cancelledFilesFlow(limit: Int): Flow<List<FileRecord>>
     @Query("UPDATE file_records SET status = 'PENDING', lastError = NULL WHERE id = :id") suspend fun requeueCancelled(id: Long)
     @Query("UPDATE file_records SET status = 'CANCELLED' WHERE status = 'PENDING'") suspend fun cancelAllPending(): Int
     @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' ORDER BY id ASC LIMIT :limit OFFSET :offset") suspend fun uploadedPageById(limit: Int, offset: Int): List<FileRecord>
@@ -91,8 +94,9 @@ interface FileRecordDao {
     fun searchCountFlow(query: String, categoryName: String, statusName: String, localStateName: String, folder: String, chatId: Long, minBytes: Long, maxBytes: Long, fromMillis: Long, toMillis: Long): Flow<Int>
 
     @Query("SELECT DISTINCT destinationChannelId FROM file_records WHERE destinationChannelId != 0 ORDER BY destinationChannelId") fun destinationChatIdsFlow(): Flow<List<Long>>
-    @Query("SELECT * FROM file_records WHERE category IN (:categoryNames) AND (:query = '' OR displayName LIKE '%' || :query || '%') AND (:onlyBackedUp = 0 OR status = 'UPLOADED') ORDER BY modifiedAtMillis DESC, id DESC LIMIT :limit") fun galleryFlow(categoryNames: List<String>, query: String, onlyBackedUp: Boolean, limit: Int): Flow<List<FileRecord>>
-    @Query("SELECT COUNT(*) FROM file_records WHERE category IN (:categoryNames) AND (:onlyBackedUp = 0 OR status = 'UPLOADED')") fun galleryCountFlow(categoryNames: List<String>, onlyBackedUp: Boolean): Flow<Int>
+    /** [statusName] is an UploadStatus name, or "" for every status. The gallery chips need Pending as well as Uploaded. */
+    @Query("SELECT * FROM file_records WHERE category IN (:categoryNames) AND (:query = '' OR displayName LIKE '%' || :query || '%') AND (:statusName = '' OR status = :statusName) ORDER BY modifiedAtMillis DESC, id DESC LIMIT :limit") fun galleryFlow(categoryNames: List<String>, query: String, statusName: String, limit: Int): Flow<List<FileRecord>>
+    @Query("SELECT COUNT(*) FROM file_records WHERE category IN (:categoryNames) AND (:statusName = '' OR status = :statusName)") fun galleryCountFlow(categoryNames: List<String>, statusName: String): Flow<Int>
     @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' AND category = :category ORDER BY uploadedAtMillis DESC LIMIT :limit") fun galleryFlow(category: BackupCategory, limit: Int): Flow<List<FileRecord>>
     @Query("SELECT COUNT(*) FROM file_records WHERE status = 'UPLOADED' AND category = :category") fun galleryCountFlow(category: BackupCategory): Flow<Int>
     @Query("UPDATE file_records SET durationMillis = :duration WHERE id = :id") suspend fun setDuration(id: Long, duration: Long)

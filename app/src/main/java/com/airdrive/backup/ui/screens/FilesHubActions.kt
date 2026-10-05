@@ -1,6 +1,5 @@
 package com.airdrive.backup.ui.screens
 
-import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
@@ -20,12 +19,15 @@ import com.airdrive.backup.data.db.UploadStatus
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.ui.nav.Routes
 import com.airdrive.backup.util.Format
+import com.airdrive.backup.util.Sharing
 import com.airdrive.backup.work.WorkScheduler
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @Composable
 fun FilesHubActions(record: FileRecord, nav: NavHostController) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
     Box {
@@ -36,11 +38,17 @@ fun FilesHubActions(record: FileRecord, nav: NavHostController) {
             DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                 menu = false
                 if (record.localState == LocalState.PRESENT) {
-                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                        type = mimeForFile(record.displayName)
-                        putExtra(Intent.EXTRA_STREAM, Uri.parse(record.uri))
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }, "Share ${record.displayName}"))
+                    // The stored uri is either a file:// path or a SAF document owned by AirDrive.
+                    // Neither may be handed to another app directly, so share a staged copy from
+                    // the FileProvider cache like every other screen in the app does.
+                    scope.launch {
+                        val staged = Sharing.stage(context, Uri.parse(record.uri), record.displayName)
+                        if (staged == null) {
+                            Toast.makeText(context, "That file is not readable on this phone any more.", Toast.LENGTH_SHORT).show()
+                        } else if (!Sharing.share(context, staged, record.displayName)) {
+                            Toast.makeText(context, "No app on this phone can handle that file.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 } else Toast.makeText(context, "This file is cloud-only. Open Preview to view it.", Toast.LENGTH_SHORT).show()
             })
             HorizontalDivider()
@@ -73,9 +81,3 @@ fun FilesHubActions(record: FileRecord, nav: NavHostController) {
     }
 }
 
-private fun mimeForFile(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.getDefault())) {
-    "jpg", "jpeg" -> "image/jpeg"; "png" -> "image/png"; "webp" -> "image/webp"; "gif" -> "image/gif"
-    "mp4" -> "video/mp4"; "mkv" -> "video/x-matroska"; "webm" -> "video/webm"
-    "mp3" -> "audio/mpeg"; "m4a" -> "audio/mp4"; "wav" -> "audio/wav"
-    "pdf" -> "application/pdf"; "txt" -> "text/plain"; else -> "application/octet-stream"
-}
