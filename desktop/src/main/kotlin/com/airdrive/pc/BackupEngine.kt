@@ -186,7 +186,7 @@ class BackupEngine(
         }
         val manifest = Manifest(dest.resolve(".airdrive-pc.tsv"))
         manifest.load()
-        val lowerKeys = !caseSensitiveNames(dest)
+        val lowerKeys = namesFoldedByDefault()
 
         val stack = ArrayDeque<Triple<Path, Path, Int>>()
         val empty = Paths.get("")
@@ -368,10 +368,14 @@ class BackupEngine(
         false
     }
 
-    private fun caseSensitiveNames(dir: Path): Boolean = try {
-        Files.getFileStore(dir).supportsCaseSensitiveNames()
-    } catch (e: Exception) {
-        true
+    /**
+     * Windows and macOS look up paths without caring about case, so a record keyed on the exact
+     * spelling of a path would call the same file new after a rename of one letter. Those two get
+     * their keys folded; everywhere else the name is taken as written.
+     */
+    private fun namesFoldedByDefault(): Boolean {
+        val os = System.getProperty("os.name", "").lowercase()
+        return os.contains("windows") || os.contains("mac") || os.contains("darwin")
     }
 
     /** Junk names first, then the user's own fragments - matched anywhere in the path, as on the phone. */
@@ -394,7 +398,7 @@ class BackupEngine(
             if (cleaned.isNotEmpty()) parts.add(cleaned)
         }
         if (parts.isEmpty()) return "unnamed"
-        return String.join("/", parts)
+        return parts.joinToString("/")
     }
 
     private fun sanitizePart(part: String): String {
