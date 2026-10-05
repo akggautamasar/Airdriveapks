@@ -113,7 +113,20 @@ class FileScanner(private val context: Context) {
                 walkFiles(root, session)
             }
         } else {
-            for (treeUri in settings.authorizedTreeUris.first()) walkSafTree(treeUri, session)
+            for (treeUri in settings.authorizedTreeUris.first()) {
+                // One entry that cannot be walked must not take the run down with it: an exception
+                // out of here left scanAll, went through BackupRepository.scan(), which does not
+                // catch, and killed whichever screen triggered the scan. Skipping the folder and
+                // flagging the walk as incomplete is the honest failure — and it keeps sweepMissing,
+                // which already declines to run on an aborted session, from calling files deleted.
+                try {
+                    walkSafTree(treeUri, session)
+                } catch (e: Exception) {
+                    if (!currentCoroutineContext().isActive) throw e
+                    session.aborted = true
+                    Log.w(tag, "authorized folder $treeUri could not be scanned: ${e.message}")
+                }
+            }
         }
 
         session.flush()
@@ -216,7 +229,15 @@ class FileScanner(private val context: Context) {
         }
 
         val stack = ArrayDeque<Pair<Uri, String>>()
-        stack.addLast(DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootDocId) to "")
+        // buildChildDocumentsUriUsingTree throws UnsupportedOperationException for a uri that is not
+        // a tree — a value stored by an older build, or a provider that has since been uninstalled.
+        val rootChildren = try {
+            DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, rootDocId)
+        } catch (e: Exception) {
+            Log.w(tag, "authorized folder $treeUriString is not a folder tree, skipping")
+            return
+        }
+        stack.addLast(rootChildren to "")
 
         while (stack.isNotEmpty()) {
             if (!currentCoroutineContext().isActive) {
@@ -253,10 +274,15 @@ class FileScanner(private val context: Context) {
 
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                         if (!Categorizer.isSkippedDir(name, pathLower) && !session.isExcluded(pathLower)) {
-                            stack.addLast(
-                                DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId) to
-                                    "$pathSoFar/$name"
-                            )
+                            val children = try {
+                                DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+                            } catch (e: Exception) {
+                                // A sub-folder this provider will not descend into; the rest of the
+                                // tree is still worth scanning.
+                                Log.w(tag, "cannot descend into $name: ${e.message}")
+                                null
+                            }
+                            if (children != null) stack.addLast(children to "$pathSoFar/$name")
                         }
                         continue
                     }

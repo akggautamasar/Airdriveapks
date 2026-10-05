@@ -1,0 +1,412 @@
+package com.airdrive.pc
+
+import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+/** What a run needs to know, and nothing it does not. */
+data class Options(
+    val sources: List<Path>,
+    val destination: Path,
+    /** Lower-case path fragments; anything whose path contains one is never read. */
+    val exclusions: List<String>,
+    /** 0 means no cap. Anything larger is skipped instead of failing on it every run. */
+    val maxFileBytes: Long,
+    val skipHidden: Boolean,
+    val dryRun: Boolean,
+    val verify: Boolean
+)
+
+/** Live counters plus a rolling log, read by the window while the walk is running. */
+class Report {
+    val seen = AtomicLong()
+    val copied = AtomicLong()
+    val bytes = AtomicLong()
+    val unchanged = AtomicLong()
+    val skipped = AtomicLong()
+    val failed = AtomicLong()
+    val lines = ConcurrentLinkedQueue<String>()
+
+    @Volatile
+    var current: String = ""
+
+    fun note(text: String) {
+        lines.add(text)
+        while (lines.size > 400) lines.poll()
+    }
+
+    fun human(): String =
+        Fmt.count(seen.get()) + " files seen | " + Fmt.count(copied.get()) + " copied (" +
+            Fmt.bytes(bytes.get()) + ") | " + Fmt.count(unchanged.get()) + " already backed up | " +
+            Fmt.count(skipped.get()) + " skipped | " + Fmt.count(failed.get()) + " failed"
+
+    fun tail(limit: Int): List<String> = lines.takeLast(limit)
+}
+
+object Fmt {
+    fun count(value: Long): String =
+        java.text.NumberFormat.getInstance(java.util.Locale.US).format(value)
+
+    fun bytes(value: Long): String {
+        if (value < 1024) return value.toString() + " B"
+        val units = arrayOf("KB", "MB", "GB", "TB")
+        var size = value.toDouble() / 1024.0
+        var index = 0
+        while (size >= 1024.0 && index < units.size - 1) {
+            size /= 1024.0
+            index++
+        }
+        return String.format(java.util.Locale.US, "%.1f %s", size, units[index])
+    }
+}
+
+/**
+ * `.airdrive-pc.tsv` in the destination: where each stored file came from, how big it was and when
+ * it last changed. That is what makes a second run finish in seconds, and what lets a later run tell
+ * "unchanged" from "new" without reading the disk again. Tabs or line breaks in a path would corrupt
+ * a row, so those files are reported and left alone rather than guessed at.
+ */
+class Manifest(private val file: Path) {
+    class Entry(val size: Long, val modifiedMillis: Long, val stored: String)
+
+    private val rows = HashMap<String, Entry>()
+    private val owners = HashMap<String, String>()
+
+    fun load() {
+        rows.clear()
+        owners.clear()
+        if (!Files.isRegularFile(file)) return
+        try {
+            Files.readAllLines(file, Charsets.UTF_8).forEach { line ->
+                val parts = line.split('\t')
+                if (parts.size >= 4) {
+                    val size = parts[1].toLongOrNull()
+                    val mtime = parts[2].toLongOrNull()
+                    if (size != null && mtime != null) {
+                        rows[parts[3]] = Entry(size, mtime, parts[0])
+                        owners[parts[0]] = parts[3]
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            // A manifest we cannot read is a fresh start, not a licence to delete anything.
+        }
+    }
+
+    /** Matches on size and mtime only, the same test the phone app uses for "unchanged". */
+    fun matches(sourceKey: String, size: Long, modifiedMillis: Long): Boolean {
+        val known = rows[sourceKey] ?: return false
+        return known.size == size && known.modifiedMillis == modifiedMillis
+    }
+
+    /** True when that stored path belongs to this source and to nothing else. */
+    fun isOurs(stored: String, sourceKey: String): Boolean = owners[stored] == sourceKey
+
+    fun remember(sourceKey: String, stored: String, size: Long, modifiedMillis: Long) {
+        rows[sourceKey] = Entry(size, modifiedMillis, stored)
+        owners[stored] = sourceKey
+    }
+
+    fun save() {
+        val parent = file.parent ?: return
+        try {
+            Files.createDirectories(parent)
+            val tmp = file.resolveSibling(file.fileName.toString() + ".part")
+            tmp.bufferedWriter(Charsets.UTF_8).use { writer ->
+                rows.forEach { (key, entry) ->
+                    writer.write(entry.stored + "\t" + entry.size + "\t" + entry.modifiedMillis + "\t" + key)
+                    writer.newLine()
+                }
+            }
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: AtomicMoveNotSupportedException) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } catch (e: IOException) {
+            // The next run just re-checks what this one already copied. Nothing is lost.
+        }
+    }
+}
+
+/**
+ * The walk itself. No database, no background service, no permission prompt: a folder tree in, a
+ * folder tree out, with the rules that make the phone app bearable - exclusions, a size cap, and
+ * never copying the same thing twice. Unreadable and excluded places are counted and named instead
+ * of quietly dropped, because a backup that skipped half your files must be able to say so.
+ */
+class BackupEngine(
+    private val options: Options,
+    private val report: Report,
+    private val cancel: AtomicBoolean
+) {
+    private val reserved = setOf(
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    )
+
+    /** Junction loops and self-referencing mounts must not be able to hang a run. */
+    private val maxDepth = 48
+
+    private val junk = setOf(
+        "\$recycle.bin", "system volume information", "temp", "tmp", "cache", "caches",
+        "thumbnails", "node_modules", "__pycache__", ".spotlight-v100"
+    )
+
+    private val claimed = HashSet<String>()
+
+    fun run() {
+        val dest = options.destination
+        try {
+            Files.createDirectories(dest)
+        } catch (e: IOException) {
+            report.note("cannot use the destination: " + e.message)
+            return
+        }
+        if (options.sources.isEmpty()) {
+            report.note("nothing to do - add a folder to back up first")
+            return
+        }
+        val manifest = Manifest(dest.resolve(".airdrive-pc.tsv"))
+        manifest.load()
+        val lowerKeys = !caseSensitiveNames(dest)
+
+        val stack = ArrayDeque<Triple<Path, Path, Int>>()
+        val empty = Paths.get("")
+        options.sources.forEach { root -> stack.addLast(Triple(root, empty, 0)) }
+
+        while (stack.isNotEmpty()) {
+            if (cancel.get()) {
+                report.note("stopped by you")
+                break
+            }
+            val frame = stack.removeLast()
+            val dir = frame.first
+            val relativeDir = frame.second
+            val depth = frame.third
+            val children = try {
+                Files.newDirectoryStream(dir).use { stream -> stream.toList() }
+            } catch (e: IOException) {
+                report.skipped.incrementAndGet()
+                report.note("cannot read $dir (" + e.message + ")")
+                continue
+            } catch (e: SecurityException) {
+                report.skipped.incrementAndGet()
+                report.note("not allowed to read $dir")
+                continue
+            }
+
+            for (child in children) {
+                if (cancel.get()) break
+                val name = child.fileName.toString()
+                if (isSymlink(child)) continue
+                val attributes = try {
+                    Files.readAttributes(child, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                } catch (e: IOException) {
+                    report.skipped.incrementAndGet()
+                    continue
+                } catch (e: SecurityException) {
+                    report.skipped.incrementAndGet()
+                    continue
+                }
+                val relative = relativeDir.resolve(name)
+
+                if (attributes.isDirectory) {
+                    if (skips(name, relative)) continue
+                    if (depth + 1 > maxDepth) {
+                        report.note("too deep, not following: $child")
+                    } else {
+                        stack.addLast(Triple(child, relative, depth + 1))
+                    }
+                    continue
+                }
+                if (!attributes.isRegularFile) continue
+                if (skips(name, relative)) {
+                    report.skipped.incrementAndGet()
+                    continue
+                }
+
+                report.seen.incrementAndGet()
+                report.current = child.toString()
+
+                val pathKey = relative.toString()
+                if (pathKey.indexOf('\t') >= 0 || pathKey.indexOf('\n') >= 0) {
+                    report.skipped.incrementAndGet()
+                    report.note("name has a tab or a line break in it, left alone: $name")
+                    continue
+                }
+                val size = attributes.size()
+                if (options.maxFileBytes > 0L && size > options.maxFileBytes) {
+                    report.skipped.incrementAndGet()
+                    report.note("over the size limit (" + Fmt.bytes(size) + "): $pathKey")
+                    continue
+                }
+                val absolute = child.toAbsolutePath().normalize().toString()
+                val key = if (lowerKeys) absolute.lowercase() else absolute
+                val modified = attributes.lastModifiedTime().toMillis()
+                if (manifest.matches(key, size, modified)) {
+                    report.unchanged.incrementAndGet()
+                    continue
+                }
+                copyOne(child, dest.resolve(sanitize(relative)), key, size, modified, manifest)
+            }
+        }
+        if (!options.dryRun) {
+            manifest.save()
+            report.note(if (options.verify) "done, copies checked byte for byte" else "done")
+        } else {
+            report.note("dry run - nothing was written, and the record of what is already stored was left alone")
+        }
+    }
+
+    private fun copyOne(
+        source: Path,
+        target: Path,
+        key: String,
+        size: Long,
+        modifiedMillis: Long,
+        manifest: Manifest
+    ) {
+        val storedName = target.toString()
+        if (options.dryRun) {
+            report.copied.incrementAndGet()
+            report.bytes.addAndGet(size)
+            report.note("would copy " + Fmt.bytes(size) + "  " + source)
+            return
+        }
+        val finalTarget = if (Files.exists(target) && !manifest.isOurs(storedName, key) && !claimed.contains(storedName))
+            freeSlot(target) else target
+        val temp = finalTarget.resolveSibling(finalTarget.fileName.toString() + ".airdrive-part")
+        try {
+            finalTarget.parent?.let { Files.createDirectories(it) }
+            Files.copy(source, temp, StandardCopyOption.REPLACE_EXISTING)
+            if (options.verify && !sameContent(source, temp)) {
+                Files.deleteIfExists(temp)
+                report.failed.incrementAndGet()
+                report.note("the copy did not match the original, so it was thrown away: $source")
+                return
+            }
+            try {
+                Files.move(temp, finalTarget, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: AtomicMoveNotSupportedException) {
+                Files.move(temp, finalTarget, StandardCopyOption.REPLACE_EXISTING)
+            }
+            try {
+                Files.setLastModifiedTime(finalTarget, FileTime.fromMillis(modifiedMillis))
+            } catch (e: IOException) {
+                // Only means the copy is stamped now rather than then.
+            }
+            claimed.add(finalTarget.toString())
+            manifest.remember(key, finalTarget.toString(), size, modifiedMillis)
+            report.copied.incrementAndGet()
+            report.bytes.addAndGet(size)
+        } catch (e: IOException) {
+            report.failed.incrementAndGet()
+            report.note("could not copy $source (" + e.message + ")")
+            try {
+                Files.deleteIfExists(temp)
+            } catch (ignored: IOException) {
+                // A leftover .airdrive-part is harmless: it is not a stored file.
+            }
+        }
+    }
+
+    /** Two different names can sanitize to the same one; the second gets a number, never an overwrite. */
+    private fun freeSlot(target: Path): Path {
+        val parent = target.parent ?: return target
+        val name = target.fileName.toString()
+        val stem = name.substringBeforeLast('.', name)
+        val ext = if (name.contains('.')) "." + name.substringAfterLast('.') else ""
+        var index = 1
+        var candidate = target
+        while (Files.exists(candidate) && index <= 99) {
+            candidate = parent.resolve(stem + " (" + index + ")" + ext)
+            index++
+        }
+        return candidate
+    }
+
+    private fun sameContent(one: Path, two: Path): Boolean = try {
+        digestOf(one) == digestOf(two)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun digestOf(path: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(1 shl 20)
+        Files.newInputStream(path).use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return java.util.Base64.getEncoder().encodeToString(digest.digest())
+    }
+
+    private fun isSymlink(path: Path): Boolean = try {
+        Files.isSymbolicLink(path)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun caseSensitiveNames(dir: Path): Boolean = try {
+        Files.getFileStore(dir).supportsCaseSensitiveNames()
+    } catch (e: Exception) {
+        true
+    }
+
+    /** Junk names first, then the user's own fragments - matched anywhere in the path, as on the phone. */
+    private fun skips(name: String, relative: Path): Boolean {
+        val lower = name.lowercase()
+        if (options.skipHidden && (lower.startsWith(".") || junk.contains(lower))) return true
+        val pathLower = relative.toString().lowercase()
+        return options.exclusions.any { fragment -> fragment.isNotEmpty() && pathLower.contains(fragment) }
+    }
+
+    /**
+     * Windows refuses < > : " | ? * and control characters in a name, refuses trailing dots and
+     * spaces, and would leave a file called nul.txt unreadable for everything after it. Underscores
+     * instead, and long names cut back before the extension so they stay openable.
+     */
+    private fun sanitize(relative: Path): String {
+        val parts = ArrayList<String>()
+        relative.forEach { part ->
+            val cleaned = sanitizePart(part.toString())
+            if (cleaned.isNotEmpty()) parts.add(cleaned)
+        }
+        if (parts.isEmpty()) return "unnamed"
+        return String.join("/", parts)
+    }
+
+    private fun sanitizePart(part: String): String {
+        val builder = StringBuilder()
+        for (c in part) {
+            builder.append(if ("<>\":|?*\\".indexOf(c) >= 0 || c.code < 32) '_' else c)
+        }
+        var name = builder.toString().trim().trimEnd('.', ' ')
+        val stem = name.substringBefore('.').uppercase()
+        if (reserved.contains(stem)) name = "_" + name
+        if (name.length > 120) {
+            val ext = name.substringAfterLast('.', "")
+            name = if (ext.isNotEmpty() && ext.length < 16 && ext != name) {
+                name.substring(0, 120 - ext.length - 1) + "." + ext
+            } else {
+                name.substring(0, 120)
+            }
+        }
+        return name
+    }
+}

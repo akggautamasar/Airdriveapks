@@ -44,11 +44,23 @@ fun ReadyScreen(nav: NavHostController) {
 
     LaunchedEffect(scanNonce) {
         scanning = true
-        repository.scan()
-        val (count, bytes) = repository.pendingSummary()
-        fileCount = count
-        totalBytes = bytes
-        scanning = false
+        try {
+            // The scan walks every folder on the phone and reads through other apps' providers, so it
+            // is entitled to fail: a SAF grant the user took back throws SecurityException from inside
+            // the query, and an unreadable folder throws too. Nothing here caught it, and an exception
+            // out of a LaunchedEffect is uncaught — the app died on the way back from choosing a
+            // folder, with a spinner as the last thing on screen.
+            repository.scan()
+            val (count, bytes) = repository.pendingSummary()
+            fileCount = count
+            totalBytes = bytes
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.w("ReadyScreen", "scan failed: ${e.message}")
+        } finally {
+            scanning = false
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF7F9FD)) {

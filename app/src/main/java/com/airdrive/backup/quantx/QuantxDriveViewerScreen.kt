@@ -22,7 +22,6 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -296,8 +295,11 @@ private fun RemotePdf(url: String?) {
     val file by produceState<File?>(null, url) { value = withContext(Dispatchers.IO) { cacheFile(context, url, ".pdf") } }
     if (file == null) Message("Loading PDF…", "Preview is cached temporarily for viewing.") else {
         val pdfFile = file
-        val pages by produceState<List<Bitmap>>(emptyList(), pdfFile) { value = withContext(Dispatchers.IO) { renderPdf(pdfFile!!) } }
-        if (pages.isEmpty()) Message("Unable to preview PDF", "Use Download to save the original file.") else LazyColumn(contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(pages) { page -> Image(bitmap = page.asImageBitmap(), contentDescription = "PDF page", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth) } }
+        // Only the page count is read up front, then each page is rendered as it scrolls into view.
+        // Rendering the whole document first holds a full-page bitmap for every page of a PDF at the
+        // same time, which runs the app out of memory before the first page is ever shown.
+        val pageCount by produceState(0, pdfFile) { value = withContext(Dispatchers.IO) { countPdfPages(pdfFile!!) } }
+        if (pageCount <= 0) Message("Unable to preview PDF", "Use Download to save the original file.") else LazyColumn(contentPadding = PaddingValues(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(pageCount) { index -> PdfPage(pdfFile!!, index) } }
     }
 }
 
@@ -398,22 +400,36 @@ private fun cacheFile(context: Context, url: String?, suffix: String): File? {
     return runCatching { http(url, null).inputStream.use { i -> f.outputStream().use { o -> i.copyTo(o) } }; f }.getOrElse { f.delete(); null }
 }
 
-private fun renderPdf(file: File): List<Bitmap> = runCatching {
+private fun countPdfPages(file: File): Int = runCatching {
+    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+        PdfRenderer(pfd).use { it.pageCount }
+    }
+}.getOrDefault(0)
+
+/** One page, opened and closed on demand so the list only ever holds the pages on screen. */
+private fun renderPdfPage(file: File, index: Int): Bitmap? = runCatching {
     ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
         PdfRenderer(pfd).use { renderer ->
-            buildList {
-                for (i in 0 until renderer.pageCount) {
-                    renderer.openPage(i).use { page ->
-                        val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
-                        bitmap.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        add(bitmap)
-                    }
-                }
+            if (index !in 0 until renderer.pageCount) return@use null
+            renderer.openPage(index).use { page ->
+                val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(android.graphics.Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                bitmap
             }
         }
     }
-}.getOrDefault(emptyList())
+}.getOrNull()
+
+@Composable
+private fun PdfPage(file: File, index: Int) {
+    val bitmap by produceState<Bitmap?>(null, file, index) {
+        value = withContext(Dispatchers.IO) { renderPdfPage(file, index) }
+    }
+    val image = bitmap
+    if (image == null) Text("Page ${index + 1}", style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 26.dp))
+    else Image(bitmap = image.asImageBitmap(), contentDescription = "PDF page ${index + 1}", modifier = Modifier.fillMaxWidth(), contentScale = ContentScale.FillWidth)
+}
 
 private fun shareText(context: Context, url: String, filename: String) {
     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
