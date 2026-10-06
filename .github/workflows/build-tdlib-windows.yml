@@ -84,16 +84,33 @@ jobs:
       - name: Hand tdlib.jar back to the repository
         if: success()
         run: |
+          set -e
           SHA="$(git rev-parse --short HEAD)"
+          JAR=tdlib-win/tdlib-windows-out/tdlib.jar
+          ls -l "$JAR" || { echo "::error::the build left no jar at $JAR"; exit 1; }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p desktop/libs
-          cp tdlib-win/tdlib-windows-out/tdlib.jar desktop/libs/tdlib.jar
+          cp "$JAR" desktop/libs/tdlib.jar
           echo "tdlib-win-$SHA" > desktop/libs/TDLIB_BUILD
           git add -f desktop/libs/tdlib.jar desktop/libs/TDLIB_BUILD
           if git diff --cached --quiet; then echo "the tree already holds this jar"; exit 0; fi
           git commit -q -m "desktop: vendored TDLib's generated Java API from tdlib-win-$SHA [skip ci]"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # A build takes about 25 minutes, which is plenty of time for somebody (or another CI run)
+          # to push here; a rejected push on the first try is not a reason to lose the jar.
+          for attempt in 1 2 3; do
+            if git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "vendored desktop/libs/tdlib.jar from tdlib-win-$SHA"
+              exit 0
+            fi
+            git fetch -q origin "${GITHUB_REF_NAME}"
+            git rebase -q "origin/${GITHUB_REF_NAME}" || {
+              echo "::error::the branch moved under this build and the jar could not be rebased onto it"
+              exit 1
+            }
+          done
+          echo "::error::could not push the vendored jar after 3 tries; it is still in the release asset"
+          exit 1
 
       - name: Publish as a release
         if: success()
