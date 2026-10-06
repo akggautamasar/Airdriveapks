@@ -176,8 +176,19 @@ log "packing the Java API"
 mkdir -p src/org/drinkless/tdlib classes "$ROOT/$OUT_DIR"
 cp "$TD_API_JAVA" src/org/drinkless/tdlib/TdApi.java
 cp td/example/java/org/drinkless/tdlib/Client.java src/org/drinkless/tdlib/Client.java
+show_javac_context() {
+  # javac names a line and nothing else; the generator's output is 40k lines, so the lines around the
+  # first errors are printed too - otherwise the only way to see what is missing is a rerun.
+  awk -F: '/error:/ { print $1 ":" $2 }' "$ROOT/javac.log" | head -8 | while IFS=: read -r file line rest; do
+    [ -f "$file" ] || continue
+    first=$((line > 4 ? line - 4 : 1))
+    last=$((line + 4))
+    echo "::error::$file:$line: $(grep -m1 -F "$file:$line:" "$ROOT/javac.log" | cut -d: -f4- | sed 's/^ *//')"
+    sed -n "${first},${last}p" "$file" | sed 's/^/::error::  /'
+  done
+}
 javac -J-Xmx1536m -encoding UTF-8 -d classes src/org/drinkless/tdlib/*.java \
-  > "$ROOT/javac.log" 2>&1 || { tail -30 "$ROOT/javac.log"; die "the generated Java API did not compile"; }
+  > "$ROOT/javac.log" 2>&1 || { tail -30 "$ROOT/javac.log"; show_javac_context; die "the generated Java API did not compile"; }
 jar --create --file "$ROOT/$OUT_DIR/tdlib.jar" -C classes . \
   || die "could not build the jar"
 cp src/org/drinkless/tdlib/TdApi.java src/org/drinkless/tdlib/Client.java "$ROOT/$OUT_DIR/"

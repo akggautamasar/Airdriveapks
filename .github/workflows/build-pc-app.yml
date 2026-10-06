@@ -43,6 +43,18 @@ jobs:
 
       # Same rule as the phone workflow: the Actions log host is not reachable from everywhere, so
       # whatever the compiler says is repeated here as a check annotation.
+      # The jar the app compiles against is committed; only the DLL comes from the TDLib release, and
+      # a missing one just means a build without upload support rather than a red run.
+      - name: Take TDLib's Windows bridge from its release
+        shell: bash
+        run: |
+          TAG="$(cat desktop/libs/TDLIB_BUILD 2>/dev/null || true)"
+          if [ -z "$TAG" ]; then
+            echo "no desktop/libs/TDLIB_BUILD yet, so this build has no native Telegram bridge"
+            exit 0
+          fi
+          sh desktop/tools/fetch-tdlib-windows.sh "$TAG" || echo "::warning::could not fetch $TAG; packaging without tdjni.dll"
+
       - name: Build the desktop distribution
         shell: bash
         run: |
@@ -73,6 +85,13 @@ jobs:
           jpackage --type app-image --name AirDrive-PC --input pc-out/jar `
             --main-jar airdrive-pc.jar --dest pc-out/image --vendor AirDrive --win-console `
             --java-options "-Dsun.java2d.uiScale=2.0"
+          # Client loads tdjni by name, and a packaged app has no java.library.path to speak of, so the
+          # DLL goes next to the jar it has to be found beside.
+          if (Test-Path desktop/libs/native/tdjni.dll) {
+            Copy-Item desktop/libs/native/*.dll pc-out/image/AirDrive-PC/app/ -Force
+          } else {
+            Write-Output "no tdjni.dll in the tree: this build will report Telegram support as unavailable"
+          }
           Compress-Archive -Path pc-out/image/AirDrive-PC -DestinationPath pc-out/AirDrive-PC-windows.zip -Force
           Get-ChildItem pc-out | Format-Table Name, Length
 
@@ -86,7 +105,9 @@ jobs:
             MINGW*|MSYS*|CYGWIN*) EXE="$(pwd -W)/pc-out/image/AirDrive-PC/AirDrive-PC.exe" ;;
           esac
           test -f pc-out/image/AirDrive-PC/AirDrive-PC.exe || { echo "::error::the packaged exe is missing"; exit 1; }
-          if ! bash desktop/tools/smoke.sh "$EXE" > smoke.log 2>&1; then
+          ARGS=""
+          if [ -f pc-out/image/AirDrive-PC/app/tdjni.dll ]; then ARGS="--expect-tdlib"; fi
+          if ! bash desktop/tools/smoke.sh "$EXE" $ARGS > smoke.log 2>&1; then
             cat smoke.log
             BODY=$(tail -30 smoke.log | tr '\n' '|' | sed 's/::/-/g' || true)
             echo "::error::the packaged app failed its end-to-end test: ${BODY:0:1900}"
@@ -104,8 +125,13 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
             --title "AirDrive for PC $SHORT" \
             --notes "PC build of commit $SHORT. **AirDrive-PC-windows.zip** holds a self-contained Windows app (no Java needed): unzip it and run \`AirDrive-PC/AirDrive-PC.exe\`. **airdrive-pc.zip** is the portable build for any machine with Java 17 or newer - unzip it and run \`airdrive-pc/bin/airdrive-pc.bat\` on Windows or \`airdrive-pc/bin/airdrive-pc\` on macOS and Linux; pass --help for the command line. Both do the same job: back up the folders you list into one destination, skipping the paths and oversized files you tell it to, and remembering what it already stored so the next run only looks at what changed. Nothing outside the destination is modified or deleted. See desktop/README.md."
-          gh release upload "$TAG" pc-out/AirDrive-PC-windows.zip --clobber
-          gh release upload "$TAG" desktop/build/distributions/airdrive-pc.zip --clobber
+          gh release upload "$TAG" pc-out/AirDrive-PC-windows.zip --clobber 2>&1 | tee -a publish.log
+          gh release upload "$TAG" desktop/build/distributions/airdrive-pc.zip --clobber 2>&1 | tee -a publish.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            sed 's/^/::error::/' publish.log | head -12
+            exit "$STATUS"
+          fi
           echo "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"
 
   linux:
@@ -123,3 +149,10 @@ jobs:
         run: sh gradlew --no-daemon -p desktop installDist
       - name: Smoke test
         run: bash desktop/tools/smoke.sh "$(pwd)/desktop/build/install/airdrive-pc/bin/airdrive-pc"
+
+      # No Windows bridge here, so the app has to say so and carry on: that is what somebody who built
+      # from source without fetching tdjni.dll will see.
+      - name: Telegram support without the native bridge
+        run: |
+          ./desktop/build/install/airdrive-pc/bin/airdrive-pc --tg-probe | tee probe.log
+          grep -qi "probe" probe.log
