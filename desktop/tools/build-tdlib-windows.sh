@@ -35,7 +35,13 @@ fetch() { # fetch <url> <ref> <dir>
 mkdir -p "$ROOT"
 cd "$ROOT" || die "cannot enter $ROOT"
 
-JAVA_HOME_DIR="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v javac")")") )}"
+if [ -n "${JAVA_HOME:-}" ]; then
+  JAVA_HOME_DIR="$JAVA_HOME"
+else
+  JAVAC_BIN="$(command -v javac 2>/dev/null || true)"
+  [ -n "$JAVAC_BIN" ] || die "no javac on PATH and JAVA_HOME is not set"
+  JAVA_HOME_DIR="$(dirname "$(dirname "$JAVAC_BIN")")"
+fi
 [ -d "$JAVA_HOME_DIR/include" ] || die "no JDK include directory at $JAVA_HOME_DIR"
 JNI_INC="$JAVA_HOME_DIR/include"
 JNI_INC2="$JAVA_HOME_DIR/include/linux"
