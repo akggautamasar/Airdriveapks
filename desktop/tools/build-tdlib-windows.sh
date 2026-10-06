@@ -122,7 +122,13 @@ log "zlib done"
 # does for Android, and example/android is the one project in TDLib that wires JNI up for a cross
 # build, so both stages configure that directory instead of the top level.
 log "generating TDLib's sources and the Java API in a native stage"
+# php is on the runner image, and when TDLib finds it it post-processes TdApi.java with
+# JavadocTlDocumentationGenerator.php and AddIntDef.php: those insert @Nullable and @IntDef
+# annotations and the androidx imports that go with them. Android has annotation-1.4.0.jar to compile
+# against; a plain JDK has nothing, and javac answers 'cannot find symbol' inside whichever class got
+# annotated. The desktop bindings need no annotations, so php is hidden from the generation stage.
 cmake -S td/example/android -B td-native -DCMAKE_BUILD_TYPE=Release -DTD_GENERATE_SOURCE_FILES=ON \
+  -DPHP_EXECUTABLE:FILEPATH=PHP_EXECUTABLE-NOTFOUND \
   > "$ROOT/td-native-configure.log" 2>&1 \
   || { tail -40 "$ROOT/td-native-configure.log"; die "the generation stage would not configure"; }
 cmake --build td-native -j "$NPROC" > "$ROOT/td-native-build.log" 2>&1 \
