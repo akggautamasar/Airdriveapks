@@ -149,10 +149,14 @@ cmake -S td/example/android -B td-win -G Ninja \
   || { tail -40 "$ROOT/tdlib-configure.log"; die "TDLib configure failed"; }
 cmake --build td-win -j "$NPROC" --target tdjni > "$ROOT/tdlib-build.log" 2>&1 \
   || { tail -40 "$ROOT/tdlib-build.log"; die "TDLib build failed"; }
-TDJNI_DLL="$(find td-win -name 'tdjni.dll' -print -quit)"
-[ -n "$TDJNI_DLL" ] && [ -f "$TDJNI_DLL" ] || die "tdjni.dll is missing after its build"
+# mingw puts the lib prefix on DLLs too, so the file on disk is usually libtdjni.dll. It ships under
+# the name the Java bindings look for, because Client.java calls System.loadLibrary("tdjni") and on
+# Windows that resolves to tdjni.dll with no prefix at all.
+TDJNI_DLL="$(find td-win \( -name 'tdjni.dll' -o -name 'libtdjni.dll' \) -print -quit)"
+[ -n "$TDJNI_DLL" ] && [ -f "$TDJNI_DLL" ] || die "no tdjni DLL anywhere under td-win"
+log "the bridge built as $TDJNI_DLL"
 mkdir -p "$ROOT/$OUT_DIR/bin/x64"
-cp "$TDJNI_DLL" "$ROOT/$OUT_DIR/bin/x64/"
+cp "$TDJNI_DLL" "$ROOT/$OUT_DIR/bin/x64/tdjni.dll"
 # What the DLL actually needs at runtime decides whether the zip has to carry anything else; the
 # answer is reported instead of assumed, because a missing companion DLL on somebody's PC is a
 # crash on launch with no explanation.
