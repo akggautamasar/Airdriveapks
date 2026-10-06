@@ -56,18 +56,10 @@ fun ReferenceCategoryDetailScreen(nav: NavHostController, category: BackupCatego
 
     val categoryNames = remember(category) { listOf(category.name) }
     val files by remember(category, statusFilter) {
-        if (statusFilter == "PENDING") {
-            dao.activityByStatusFlow(UploadStatus.PENDING, "", category.name, LIMIT)
-        } else {
-            dao.galleryFlow(categoryNames, "", statusFilter == "UPLOADED", LIMIT)
-        }
+        dao.galleryFlow(categoryNames, "", statusFilter, LIMIT)
     }.collectAsState(initial = emptyList())
     val total by remember(category, statusFilter) {
-        if (statusFilter == "PENDING") {
-            kotlinx.coroutines.flow.flowOf(files.size)
-        } else {
-            dao.galleryCountFlow(categoryNames, statusFilter == "UPLOADED")
-        }
+        dao.galleryCountFlow(categoryNames, statusFilter)
     }.collectAsState(initial = 0)
     val restore by repository.restoreState.collectAsState()
     val isMedia = category == BackupCategory.PHOTOS || category == BackupCategory.VIDEOS

@@ -45,7 +45,6 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val ALLOWED_PHONE = "+916307868952"
 private val QBlue = Color(0xFF5B5FEF)
 private val QPurple = Color(0xFF7C3AED)
 private val QBg = Color(0xFFF7F8FC)
@@ -59,7 +58,6 @@ fun QuantxDriveScreen(nav: NavHostController) {
     val tdClient = remember { TdClient.get(context) }
     val scope = rememberCoroutineScope()
     val authState by tdClient.authState.collectAsState()
-    val identity = remember { context.getSharedPreferences("quantxdrive_identity", 0).getString("phone", "") ?: "" }
     var phase by remember { mutableStateOf(if (api.savedToken != null) "home" else "login") }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -80,7 +78,7 @@ fun QuantxDriveScreen(nav: NavHostController) {
     val mode = QuantViewMode.valueOf(modeName)
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
-    val allowed = identity.filter { !it.isWhitespace() }.replace("-", "") == ALLOWED_PHONE
+    val allowed = QuantxAccess.isAllowed(context)
 
     suspend fun reload() {
         loading = true; loadingMore = false; error = null; page = 1; hasMore = false; total = null
@@ -110,7 +108,9 @@ fun QuantxDriveScreen(nav: NavHostController) {
         api.stats().onSuccess { stats = it; if (it.categoryCounts.isNotEmpty()) counts = it.categoryCounts }
         api.categoryCounts().onSuccess { if (it.isNotEmpty()) counts = it }
     }
-    LaunchedEffect(mode) {
+    // Keyed on phase as well: signing in flips phase to "home", and without that key this effect
+    // had already returned for good and the list never loaded page 2 on its own.
+    LaunchedEffect(mode, phase) {
         if (phase != "home") return@LaunchedEffect
         snapshotFlow { if (mode == QuantViewMode.GRID) gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 else listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
             .collect { index -> if (index >= (files.size - 15).coerceAtLeast(0)) more() }
@@ -131,7 +131,7 @@ fun QuantxDriveScreen(nav: NavHostController) {
             Spacer(Modifier.height(24.dp)); Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp)) { Column(Modifier.padding(20.dp)) {
                 Text("Secure access", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Spacer(Modifier.height(14.dp))
                 OutlinedTextField(password, { password = it }, label = { Text("QuantxDrive password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(14.dp)); Button(enabled = password.isNotBlank() && !loading, onClick = { loading = true; error = null; scope.launch { api.login(ALLOWED_PHONE, password).onSuccess { phase = "home" }.onFailure { error = it.message }; loading = false } }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(if (loading) "Unlocking…" else "Unlock QuantxDrive") }
+                Spacer(Modifier.height(14.dp)); Button(enabled = password.isNotBlank() && !loading, onClick = { loading = true; error = null; scope.launch { api.login(QuantxAccess.ALLOWED_PHONE, password).onSuccess { phase = "home" }.onFailure { error = it.message }; loading = false } }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(if (loading) "Unlocking…" else "Unlock QuantxDrive") }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 10.dp)) }
             } }; Spacer(Modifier.height(16.dp)); Text("Telegram connection: ${if (authState == AuthState.READY) "Connected" else "Not ready"}", style = MaterialTheme.typography.labelMedium)
         } }; return

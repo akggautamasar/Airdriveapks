@@ -2,7 +2,6 @@ package com.airdrive.backup.ui.screens
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -53,7 +52,10 @@ import com.airdrive.backup.data.db.UploadStatus
 import com.airdrive.backup.telegram.TelegramCloudDataSource
 import com.airdrive.backup.telegram.TdClient
 import com.airdrive.backup.util.Format
+import com.airdrive.backup.util.Sharing
+import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -89,11 +91,19 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
     var loading by remember(recordId) { mutableStateOf(true) }
     var fullscreen by rememberSaveable(recordId) { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val originalOrientation = remember { activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
 
     LaunchedEffect(recordId) {
-        record = withContext(Dispatchers.IO) { dao.knownFiles().firstOrNull { it.id == recordId }?.let { dao.findByUri(it.uri) } }
-        local = record?.let { findLocalUri(context, it) }
+        // One indexed lookup by id. The old shape read every row of file_records into memory and
+        // then re-queried by uri, which is seconds of work just to open one viewer, and it checked
+        // for the file's bytes on the main thread.
+        val loaded = withContext(Dispatchers.IO) {
+            val found = dao.findById(recordId)
+            found to found?.let { findLocalUri(context, it) }
+        }
+        record = loaded.first
+        local = loaded.second
         loading = false
     }
 
@@ -124,10 +134,22 @@ fun FileViewerScreen(nav: NavHostController, recordId: Long) {
                 } },
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } },
                 actions = {
-                    IconButton(enabled = local != null, onClick = { local?.let { shareLocal(context, it, record?.displayName ?: "file") } }) { Icon(Icons.Default.Share, "Share") }
+                    IconButton(
+                        enabled = local != null,
+                        onClick = {
+                            val uri = local ?: return@IconButton
+                            val name = record?.displayName ?: "file"
+                            scope.launch { handOff(context, uri, name, openInstead = false)?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() } }
+                        }
+                    ) { Icon(Icons.Default.Share, "Share") }
                     Box { IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("File details") }, onClick = { menu = false })
-                        DropdownMenuItem(enabled = local != null, text = { Text("Open with…") }, onClick = { local?.let { openWith(context, it) }; menu = false })
+                        DropdownMenuItem(enabled = local != null, text = { Text("Open with…") }, onClick = {
+                            menu = false
+                            val uri = local ?: return@DropdownMenuItem
+                            val name = record?.displayName ?: "file"
+                            scope.launch { handOff(context, uri, name, openInstead = true)?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() } }
+                        })
                     } }
                 }
             )
@@ -294,5 +316,16 @@ private fun extractOfficeText(file: File, name: String): String { ZipFile(file).
 
 private fun findLocalUri(context: Context, r: FileRecord): Uri? { val u = Uri.parse(r.uri); return when { u.scheme.equals("file", true) -> u.takeIf { it.path?.let(::File)?.isFile == true }; u.scheme.equals("content", true) -> runCatching { context.contentResolver.openAssetFileDescriptor(u, "r")?.use { u } }.getOrNull(); else -> null } }
 private suspend fun copyToCache(context: Context, uri: Uri, name: String): File = withContext(Dispatchers.IO) { val target = File(context.cacheDir, "airdrive_preview_$name"); context.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(target).use { output -> input.copyTo(output); output.flush() } } ?: error("Cannot read file"); if (!target.isFile || target.length() == 0L) error("Preview cache file was not created"); target }
-private fun shareLocal(context: Context, uri: Uri, name: String) { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "*/*"; putExtra(Intent.EXTRA_STREAM, uri); putExtra(Intent.EXTRA_TEXT, name); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share file")) }
-private fun openWith(context: Context, uri: Uri) { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW).apply { data = uri; type = "*/*"; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Open with")) }
+/**
+ * Hands the file to another app, either through the share sheet or straight to a viewer.
+ *
+ * The uri stored on the record is a file:// path or a SAF document only AirDrive is allowed to
+ * read; giving either of those to another app is refused by Android, so the bytes are copied into
+ * the app's own cache first and shared out through the FileProvider. Returns null when the other
+ * app got the file, otherwise the message to show the user.
+ */
+private suspend fun handOff(context: Context, uri: Uri, name: String, openInstead: Boolean): String? {
+    val staged = Sharing.stage(context, uri, name) ?: return "That file is not readable on this phone any more."
+    val handled = if (openInstead) Sharing.open(context, staged, name) else Sharing.share(context, staged, name)
+    return if (handled) null else "No app on this phone can handle that file."
+}
