@@ -46,7 +46,13 @@ fi
 [ -d "$JAVA_HOME_DIR/include" ] || die "no JDK include directory at $JAVA_HOME_DIR"
 JNI_INC="$JAVA_HOME_DIR/include"
 JNI_INC2="$JAVA_HOME_DIR/include/linux"
-STATIC_LINK="-static-libgcc -static-libgcc -static-libstdc++"
+STATIC_LINK="-static-libgcc -static-libstdc++"
+# Threads pulls in winpthread dynamically by default, which would leave tdjni.dll needing a DLL we
+# are not shipping; prefer the static archive when the toolchain has one.
+WINPTHREAD_STATIC="$($TRIPLE-gcc -print-file-name=libwinpthread.a 2>/dev/null || true)"
+if [ -n "$WINPTHREAD_STATIC" ] && [ -f "$WINPTHREAD_STATIC" ]; then
+  STATIC_LINK="$STATIC_LINK -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic"
+fi
 KERNEL32="$($TRIPLE-gcc -print-file-name=libkernel32.a 2>/dev/null || true)"
 [ -n "$KERNEL32" ] && [ -f "$KERNEL32" ] || KERNEL32="$ROOT/empty.lib"
 
@@ -111,11 +117,26 @@ cp zlib/zlib.h zlib/zconf.h zlib-win/include/ || die "zlib headers are missing"
 cp zlib/libz.a zlib-win/lib/ || die "libz.a is missing after its own build"
 log "zlib done"
 
-log "building TDLib"
-cmake -S td -B td-build -G Ninja \
+# TDLib cannot generate its own sources while cross-compiling: every generated file, including
+# TdApi.java, comes out of a host build first. That is what TDLib's own example/android/build-tdlib.sh
+# does for Android, and example/android is the one project in TDLib that wires JNI up for a cross
+# build, so both stages configure that directory instead of the top level.
+log "generating TDLib's sources and the Java API in a native stage"
+cmake -S td/example/android -B td-native -DCMAKE_BUILD_TYPE=Release -DTD_GENERATE_SOURCE_FILES=ON \
+  > "$ROOT/td-native-configure.log" 2>&1 \
+  || { tail -40 "$ROOT/td-native-configure.log"; die "the generation stage would not configure"; }
+cmake --build td-native -j "$NPROC" > "$ROOT/td-native-build.log" 2>&1 \
+  || { tail -40 "$ROOT/td-native-build.log"; die "TDLib source generation failed"; }
+cmake --build td-native -j "$NPROC" --target tl_generate_java > "$ROOT/td-java-gen.log" 2>&1 \
+  || { tail -40 "$ROOT/td-java-gen.log"; die "the Java API generator failed"; }
+TD_API_JAVA="$(find td/example/android -name 'TdApi.java' -print -quit)"
+[ -n "$TD_API_JAVA" ] || die "TdApi.java was never generated"
+log "TdApi.java generated at $TD_API_JAVA"
+
+log "cross-building tdjni.dll for $TRIPLE"
+cmake -S td/example/android -B td-win -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-mingw.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="$ROOT/install" \
   -DTD_ENABLE_JNI=ON \
   "${JNI_ARGS[@]}" \
   -DZLIB_INCLUDE_DIR="$ROOT/zlib-win/include" \
@@ -126,31 +147,29 @@ cmake -S td -B td-build -G Ninja \
   -DOPENSSL_CRYPTO_LIBRARY="$ROOT/openssl/libcrypto.a" \
   > "$ROOT/tdlib-configure.log" 2>&1 \
   || { tail -40 "$ROOT/tdlib-configure.log"; die "TDLib configure failed"; }
-cmake --build td-build -j "$NPROC" --target tdjson tdcore td_generate_java_api \
-  > "$ROOT/tdlib-build.log" 2>&1 \
+cmake --build td-win -j "$NPROC" --target tdjni > "$ROOT/tdlib-build.log" 2>&1 \
   || { tail -40 "$ROOT/tdlib-build.log"; die "TDLib build failed"; }
-cmake --install td-build > "$ROOT/tdlib-install.log" 2>&1 \
-  || { tail -20 "$ROOT/tdlib-install.log"; die "TDLib install failed"; }
-log "TDLib built; tdjson is at $(find td-build -name 'tdjson*.dll' | head -1)"
-
-log "building tdjni (the JNI bridge the Java bindings load)"
-cmake -S td/example/java -B java-build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-mingw.cmake" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$ROOT/install" \
-  -DZLIB_INCLUDE_DIR="$ROOT/zlib-win/include" \
-  -DZLIB_LIBRARY="$ROOT/zlib-win/lib/libz.a" \
-  -DCMAKE_INSTALL_PREFIX="$ROOT/install" \
-  "${JNI_ARGS[@]}" \
-  > "$ROOT/java-configure.log" 2>&1 \
-  || { tail -40 "$ROOT/java-configure.log"; die "tdjni configure failed"; }
-cmake --build java-build -j "$NPROC" --target tdjni > "$ROOT/java-build.log" 2>&1 \
-  || { tail -40 "$ROOT/java-build.log"; die "tdjni build failed"; }
+TDJNI_DLL="$(find td-win -name 'tdjni.dll' -print -quit)"
+[ -n "$TDJNI_DLL" ] && [ -f "$TDJNI_DLL" ] || die "tdjni.dll is missing after its build"
+mkdir -p "$ROOT/$OUT_DIR/bin/x64"
+cp "$TDJNI_DLL" "$ROOT/$OUT_DIR/bin/x64/"
+# What the DLL actually needs at runtime decides whether the zip has to carry anything else; the
+# answer is reported instead of assumed, because a missing companion DLL on somebody's PC is a
+# crash on launch with no explanation.
+log "runtime dependencies of tdjni.dll:"
+x86_64-w64-mingw32-objdump -p "$TDJNI_DLL" | awk '/DLL Name/ {print "[tdlib-win]   needs " $3}'
+if x86_64-w64-mingw32-objdump -p "$TDJNI_DLL" | grep -qi "DLL Name: libwinpthread-1.dll"; then
+  PTHREAD_DLL="$(find /usr -name 'libwinpthread-1.dll' 2>/dev/null | head -1)"
+  if [ -n "$PTHREAD_DLL" ]; then
+    cp "$PTHREAD_DLL" "$ROOT/$OUT_DIR/bin/x64/"
+    log "libwinpthread-1.dll is needed at runtime and ships beside tdjni.dll"
+  else
+    log "WARNING: tdjni.dll needs libwinpthread-1.dll and no copy of it was found"
+  fi
+fi
 
 log "packing the Java API"
 mkdir -p src/org/drinkless/tdlib classes "$ROOT/$OUT_DIR"
-TD_API_JAVA="$(find td/example/java -name 'TdApi.java' | head -1)"
-[ -n "$TD_API_JAVA" ] || die "TdApi.java was never generated"
 cp "$TD_API_JAVA" src/org/drinkless/tdlib/TdApi.java
 cp td/example/java/org/drinkless/tdlib/Client.java src/org/drinkless/tdlib/Client.java
 javac -J-Xmx1536m -encoding UTF-8 -d classes src/org/drinkless/tdlib/*.java \
@@ -159,21 +178,14 @@ jar --create --file "$ROOT/$OUT_DIR/tdlib.jar" -C classes . \
   || die "could not build the jar"
 cp src/org/drinkless/tdlib/TdApi.java src/org/drinkless/tdlib/Client.java "$ROOT/$OUT_DIR/"
 
-for found in "$(find td-build -name 'tdjson.dll' | head -1)" "$(find java-build -name 'tdjni.dll' | head -1)"; do
-  [ -n "$found" ] && [ -f "$found" ] || die "a built DLL is missing"
-  mkdir -p "$ROOT/$OUT_DIR/bin/x64"
-  cp "$found" "$ROOT/$OUT_DIR/bin/x64/"
-done
-
 {
   echo "TDLib for Windows x86_64"
   echo "tdlib/td commit: $TDLIB_SHA  (the same one the phone app builds)"
-  echo "openssl: $OPENSSL_TAG, linked statically"
+  echo "openssl: $OPENSSL_TAG and zlib $ZLIB_TAG, both linked in"
   echo
-  echo "bin/x64/tdjson.dll  - the C JSON interface"
   echo "bin/x64/tdjni.dll   - the bridge org.drinkless.tdlib.Client loads by name"
+  echo "TdApi.java and Client.java - the sources, for anyone who would rather compile them"
   echo "tdlib.jar           - Client.java and the generated TdApi.java, compiled"
-  echo "TdApi.java, Client.java - the sources, so a build can compile against them directly"
 } > "$ROOT/$OUT_DIR/README.txt"
 
 ( cd "$ROOT/$OUT_DIR" && rm -f "$ROOT/$ZIP_NAME" && zip -q -r "$ROOT/$ZIP_NAME" . ) || die "zipping failed"
