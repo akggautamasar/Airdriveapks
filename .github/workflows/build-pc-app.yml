@@ -46,14 +46,24 @@ jobs:
       # The jar the app compiles against is committed; only the DLL comes from the TDLib release, and
       # a missing one just means a build without upload support rather than a red run.
       - name: Take TDLib's Windows bridge from its release
-        shell: bash
+        shell: pwsh
         run: |
-          TAG="$(cat desktop/libs/TDLIB_BUILD 2>/dev/null || true)"
-          if [ -z "$TAG" ]; then
-            echo "no desktop/libs/TDLIB_BUILD yet, so this build has no native Telegram bridge"
+          $tagFile = "desktop/libs/TDLIB_BUILD"
+          if (-not (Test-Path $tagFile)) {
+            Write-Output "no desktop/libs/TDLIB_BUILD yet: this build will report Telegram support as unavailable"
             exit 0
-          fi
-          sh desktop/tools/fetch-tdlib-windows.sh "$TAG" || echo "::warning::could not fetch $TAG; packaging without tdjni.dll"
+          }
+          $tag = (Get-Content $tagFile -Raw).Trim()
+          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/download/${tag}/tdlib-windows-x86_64.zip"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile tdlib.zip -UseBasicParsing -ErrorAction Stop
+            Expand-Archive -Path tdlib.zip -DestinationPath tdlib-zip -Force
+            New-Item -ItemType Directory -Force -Path desktop/libs/native | Out-Null
+            Copy-Item -Path "tdlib-zip/bin/x64/*.dll" -Destination desktop/libs/native/ -Force
+            Get-ChildItem desktop/libs/native | Format-Table Name, Length
+          } catch {
+            Write-Output "::warning::could not fetch $tag ($($_.Exception.Message)); packaging without tdjni.dll"
+          }
 
       - name: Build the desktop distribution
         shell: bash
