@@ -28,6 +28,13 @@ jobs:
       - name: Checkout AirDrive
         uses: actions/checkout@v4
 
+      # The release is named after the commit that produced it, and the marker the desktop build reads
+      # has to agree with it. Compute it here, once: a later step commits to the branch, which would
+      # otherwise move HEAD out from under the name.
+      - name: Name this build
+        id: name
+        run: echo "tag=tdlib-win-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
       - name: Install the cross toolchain
         run: |
           sudo apt-get update
@@ -85,14 +92,14 @@ jobs:
         if: success()
         run: |
           set -e
-          SHA="$(git rev-parse --short HEAD)"
+          SHA="${GITHUB_SHA:0:7}"
           JAR=tdlib-win/tdlib-windows-out/tdlib.jar
           ls -l "$JAR" || { echo "::error::the build left no jar at $JAR"; exit 1; }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p desktop/libs
           cp "$JAR" desktop/libs/tdlib.jar
-          echo "tdlib-win-$SHA" > desktop/libs/TDLIB_BUILD
+          echo "${{ steps.name.outputs.tag }}" > desktop/libs/TDLIB_BUILD
           git add -f desktop/libs/tdlib.jar desktop/libs/TDLIB_BUILD
           if git diff --cached --quiet; then echo "the tree already holds this jar"; exit 0; fi
           git commit -q -m "desktop: vendored TDLib's generated Java API from tdlib-win-$SHA [skip ci]"
@@ -112,18 +119,56 @@ jobs:
           echo "::error::could not push the vendored jar after 3 tries; it is still in the release asset"
           exit 1
 
+      - name: Hand tdlib.jar back to the repository
+        if: success()
+        run: |
+          set -e
+          SHA="${GITHUB_SHA:0:7}"
+          JAR=tdlib-win/tdlib-windows-out/tdlib.jar
+          ls -l "$JAR" || { echo "::error::the build left no jar at $JAR"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p desktop/libs
+          cp "$JAR" desktop/libs/tdlib.jar
+          echo "${{ steps.name.outputs.tag }}" > desktop/libs/TDLIB_BUILD
+          git add -f desktop/libs/tdlib.jar desktop/libs/TDLIB_BUILD
+          if git diff --cached --quiet; then echo "the tree already holds this jar"; exit 0; fi
+          git commit -q -m "desktop: vendored TDLib's generated Java API from tdlib-win-$SHA [skip ci]"
+          # A build takes about 25 minutes, which is plenty of time for somebody (or another CI run)
+          # to push here; a rejected push on the first try is not a reason to lose the jar.
+          for attempt in 1 2 3; do
+            if git push -q origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "vendored desktop/libs/tdlib.jar from tdlib-win-$SHA"
+              exit 0
+            fi
+            git fetch -q origin "${GITHUB_REF_NAME}"
+            git rebase -q "origin/${GITHUB_REF_NAME}" || {
+              echo "::error::the branch moved under this build and the jar could not be rebased onto it"
+              exit 1
+            }
+          done
+          echo "::error::could not push the vendored jar after 3 tries; it is still in the release asset"
+          exit 1
+
+      # Publish first: a desktop build reads desktop/libs/TDLIB_BUILD, so the release the marker names
+      # has to exist by the time that marker is committed. --target matters - without it gh tags the
+      # default branch, which is how one attempt ended up with a tag pointing at main and no release.
       - name: Publish as a release
         if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.name.outputs.tag }}
         run: |
-          SHA="$(git rev-parse --short HEAD)"
-          TAG="tdlib-win-$SHA"
+          SHA="${GITHUB_SHA:0:7}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
               --prerelease \
               --title "TDLib for Windows x86_64 ($SHA)" \
               --notes "Built by desktop/tools/build-tdlib-windows.sh from TDLib $SHA of the pinned commit: tdjson.dll, tdjni.dll, tdlib.jar (org.drinkless.tdlib.TdApi / Client) and the CMake package. Static against OpenSSL, so the DLLs need nothing else."
           fi
           gh release upload "$TAG" tdlib-win/tdlib-windows-x86_64.zip --clobber
+          gh release view "$TAG" --json assets -q '"release " + .tagName + " holds " + ([.assets[].name] | join(", "))' \
+            || { echo "::error::$TAG was created but cannot be read back"; exit 1; }
           echo "Download: https://github.com/akggautamasar/Airdriveapks/releases/download/$TAG/tdlib-windows-x86_64.zip"
+

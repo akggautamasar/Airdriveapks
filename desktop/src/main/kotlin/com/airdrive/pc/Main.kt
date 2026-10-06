@@ -282,6 +282,10 @@ private fun printHelp() {
           --only LIST           take only these types, comma separated (jpg,heic,png,mp4)
           --max-mb N            leave files bigger than this alone (0 = no limit)
           --dry-run             say what would be copied, write nothing
+          --no-verify           do not hash copies to check them
+          --keep-hidden         include folders starting with a dot, and caches
+          --gui                 open the window even if paths were given
+
         To Telegram instead of a folder:
           --tg                  upload to Telegram; --dest then only holds the record file
           --tg-chat <chat>      a channel id, -100..., @name or a t.me link; default Saved Messages
@@ -290,9 +294,6 @@ private fun printHelp() {
                                 the same names); the first run asks for your phone number and the code,
                                 after that the session in --tg-session is reused
           --tg-session <folder> where Telegram's own login data is kept (default <dest>/.airdrive-telegram)
-          --no-verify           do not hash copies to check them
-          --keep-hidden         include folders starting with a dot, and caches
-          --gui                 open the window even if paths were given
 
         Two bare paths are read as source and destination. What has already been stored is kept in
         .airdrive-pc.tsv inside the destination, so a second run only looks at what changed. Nothing
