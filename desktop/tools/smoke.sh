@@ -71,8 +71,10 @@ cmp -s src/photos/2024/big.bin dst/photos/2024/big.bin || fail "the stored copy 
 echo "ok   exclusions, hidden skip, structure and bytes"
 
 # 3. a second run changes nothing and duplicates nothing
+# The rules have to be repeated here: they are per-run options, not something the record file
+# remembers, so leaving --exclude off would legitimately store skipme/ a second time.
 before=$(find dst -type f ! -name '.airdrive-pc.tsv' | wc -l | tr -d ' ')
-run --source src --dest dst || fail "the second run failed"
+run --source src --dest dst --exclude skipme || fail "the second run failed"
 grep -q "already backed up" run.log || fail "the second run did not report anything as already backed up"
 after=$(find dst -type f ! -name '.airdrive-pc.tsv' | wc -l | tr -d ' ')
 [ "$before" = "$after" ] || fail "the second run changed the number of stored files ($before -> $after)"
@@ -81,9 +83,10 @@ echo "ok   second run copied nothing"
 
 # 4. an updated file replaces its own copy, it does not grow a twin beside it
 echo changed >> src/a.txt
-run --source src --dest dst || fail "the run after a change failed"
+run --source src --dest dst --exclude skipme || fail "the run after a change failed"
 [ "$(find dst -maxdepth 1 -name 'a*.txt' | wc -l | tr -d ' ')" = "1" ] || fail "an updated file left a duplicate: $(find dst -name 'a*.txt')"
 grep -q "1 copied" run.log || fail "the changed file was not re-copied: $(tail -2 run.log)"
+cmp -s src/a.txt dst/a.txt || fail "the stored copy did not get the new content"
 echo "ok   updated file replaced its own copy"
 
 # 5. the size cap
