@@ -78,6 +78,23 @@ jobs:
             done
           fi
 
+      # The generated Java API is what the desktop module compiles against, and tdlib/td publishes no
+      # jar to depend on, so the build hands it back to the tree. [skip ci] keeps this from starting a
+      # fresh round of builds; the DLL is left out of git on purpose (see desktop/tools/fetch-tdlib-windows.sh).
+      - name: Hand tdlib.jar back to the repository
+        if: success()
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p desktop/libs
+          cp tdlib-win/tdlib-windows-out/tdlib.jar desktop/libs/tdlib.jar
+          echo "tdlib-win-$SHA" > desktop/libs/TDLIB_BUILD
+          git add -f desktop/libs/tdlib.jar desktop/libs/TDLIB_BUILD
+          if git diff --cached --quiet; then echo "the tree already holds this jar"; exit 0; fi
+          git commit -q -m "desktop: vendored TDLib's generated Java API from tdlib-win-$SHA [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
       - name: Publish as a release
         if: success()
         env:
