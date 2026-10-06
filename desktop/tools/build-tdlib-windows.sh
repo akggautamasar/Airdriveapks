@@ -21,7 +21,7 @@ ZIP_NAME="${ZIP_NAME:-tdlib-windows-x86_64.zip}"
 NPROC="$(nproc 2>/dev/null || echo 2)"
 
 log() { echo "[tdlib-win] $*"; }
-die() { echo "FAILED: $*"; exit 1; }
+die() { echo "FAILED: $*"; echo "::error::stopped while building: $*"; exit 1; }
 
 fetch() { # fetch <url> <ref> <dir>
   local url="$1" ref="$2" dir="$3"

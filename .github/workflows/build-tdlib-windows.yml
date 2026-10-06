@@ -31,8 +31,10 @@ jobs:
       - name: Install the cross toolchain
         run: |
           sudo apt-get update
+          # gperf is what TDLib's tdutils/generate stage runs to make its MIME tables; without it the
+          # generation stage stops with "Could NOT find gperf" before anything is compiled.
           sudo apt-get install -y --no-install-recommends \
-            mingw-w64 ninja-build zip unzip file perl autoconf libtool
+            mingw-w64 ninja-build zip unzip file perl autoconf libtool gperf
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -47,13 +49,14 @@ jobs:
           rc=${PIPESTATUS[0]}
           if [ "$rc" -ne 0 ]; then
             # One annotation per interesting line: runner logs are not readable from outside,
-            # annotations are.
-            grep -E "FAILED:|error:|Error [0-9]|undefined reference|CMake Error|No such file" tdlib-build.log \
-              | tail -30 | sed 's/\r$//' | while IFS= read -r line; do
-                echo "::error::${line}"
-              done
-            echo "::error::last 25 lines follow"
-            tail -25 tdlib-build.log | sed 's/\r$//' | while IFS= read -r line; do
+            # annotations are. CMake's own explanation is on the lines *after* "CMake Error", so the
+            # context comes too.
+            {
+              grep -E -A5 "CMake Error" tdlib-build.log | tail -40
+              grep -E "FAILED:|error: |Error [0-9]|undefined reference|No such file|not found" tdlib-build.log | tail -25
+              echo "===== last 25 lines ====="
+              tail -25 tdlib-build.log
+            } | sed 's/\r$//' | while IFS= read -r line; do
               echo "::error::${line}"
             done
             exit "$rc"
