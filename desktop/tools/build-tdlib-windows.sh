@@ -13,6 +13,7 @@ set -uo pipefail
 
 TDLIB_SHA="${TDLIB_SHA:-d1085f9cebc5a62379991ae1652673954f229c1f}"
 OPENSSL_TAG="${OPENSSL_TAG:-OpenSSL_1_1_1w}"
+ZLIB_TAG="${ZLIB_TAG:-v1.3.1}"
 TRIPLE=x86_64-w64-mingw32
 ROOT="$(pwd)/tdlib-win"
 OUT_DIR="${OUT_DIR:-tdlib-windows-out}"
@@ -81,9 +82,10 @@ JNI_ARGS=(
   "-DJAVA_INCLUDE_PATH=$JNI_INC" "-DJAVA_INCLUDE_PATH2=$JNI_INC2" "-DJAVA_JVM_LIBRARY=$KERNEL32"
 )
 
-log "sources: tdlib $TDLIB_SHA, openssl $OPENSSL_TAG"
+log "sources: tdlib $TDLIB_SHA, openssl $OPENSSL_TAG, zlib $ZLIB_TAG"
 fetch https://github.com/openssl/openssl.git "refs/tags/$OPENSSL_TAG" openssl
 fetch https://github.com/tdlib/td.git "$TDLIB_SHA" td
+fetch https://github.com/madler/zlib.git "refs/tags/$ZLIB_TAG" zlib
 
 log "building OpenSSL for $TRIPLE (static, so the result needs no companion DLLs)"
 (
@@ -95,6 +97,20 @@ log "building OpenSSL for $TRIPLE (static, so the result needs no companion DLLs
 [ -f openssl/libssl.a ] && [ -f openssl/libcrypto.a ] || die "OpenSSL static libraries are missing"
 log "OpenSSL done"
 
+# TDLib's root CMakeLists does `find_package(ZLIB)` and then returns out of the build with only a
+# warning if zlib is not there, and a Windows zlib is not on a Linux runner: cross-build one.
+# Static only, the same reason OpenSSL is static - the shipped DLLs then need no zlib1.dll.
+log "building zlib for Windows (TDLib refuses to configure without it)"
+(
+  cd zlib || exit 1
+  make -f win32/Makefile.gcc PREFIX="$TRIPLE-" clean > /dev/null 2>&1
+  make -f win32/Makefile.gcc PREFIX="$TRIPLE-" -j"$NPROC" libz.a > "$ROOT/zlib-build.log" 2>&1 || exit 1
+) || { tail -25 "$ROOT/zlib-build.log" 2>/dev/null; die "zlib build failed"; }
+mkdir -p zlib-win/include zlib-win/lib || die "cannot create the zlib prefix"
+cp zlib/zlib.h zlib/zconf.h zlib-win/include/ || die "zlib headers are missing"
+cp zlib/libz.a zlib-win/lib/ || die "libz.a is missing after its own build"
+log "zlib done"
+
 log "building TDLib"
 cmake -S td -B td-build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-mingw.cmake" \
@@ -102,6 +118,8 @@ cmake -S td -B td-build -G Ninja \
   -DCMAKE_INSTALL_PREFIX="$ROOT/install" \
   -DTD_ENABLE_JNI=ON \
   "${JNI_ARGS[@]}" \
+  -DZLIB_INCLUDE_DIR="$ROOT/zlib-win/include" \
+  -DZLIB_LIBRARY="$ROOT/zlib-win/lib/libz.a" \
   -DOPENSSL_ROOT_DIR="$ROOT/openssl" \
   -DOPENSSL_INCLUDE_DIR="$ROOT/openssl/include" \
   -DOPENSSL_SSL_LIBRARY="$ROOT/openssl/libssl.a" \
@@ -120,6 +138,8 @@ cmake -S td/example/java -B java-build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/toolchain-mingw.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$ROOT/install" \
+  -DZLIB_INCLUDE_DIR="$ROOT/zlib-win/include" \
+  -DZLIB_LIBRARY="$ROOT/zlib-win/lib/libz.a" \
   -DCMAKE_INSTALL_PREFIX="$ROOT/install" \
   "${JNI_ARGS[@]}" \
   > "$ROOT/java-configure.log" 2>&1 \
