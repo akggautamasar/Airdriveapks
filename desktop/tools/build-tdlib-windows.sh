@@ -126,9 +126,11 @@ log "generating TDLib's sources and the Java API in a native stage"
 # JavadocTlDocumentationGenerator.php and AddIntDef.php: those insert @Nullable and @IntDef
 # annotations and the androidx imports that go with them. Android has annotation-1.4.0.jar to compile
 # against; a plain JDK has nothing, and javac answers 'cannot find symbol' inside whichever class got
-# annotated. The desktop bindings need no annotations, so php is hidden from the generation stage.
+# annotated. The desktop bindings need no annotations, so php is replaced by something that takes the
+# arguments and does nothing - and it has to be a real path, because CMake re-searches a cached
+# lookup that looks like a failure ("-NOTFOUND") and would find the runner's php again.
 cmake -S td/example/android -B td-native -DCMAKE_BUILD_TYPE=Release -DTD_GENERATE_SOURCE_FILES=ON \
-  -DPHP_EXECUTABLE:FILEPATH=PHP_EXECUTABLE-NOTFOUND \
+  -DPHP_EXECUTABLE:FILEPATH=/bin/true \
   > "$ROOT/td-native-configure.log" 2>&1 \
   || { tail -40 "$ROOT/td-native-configure.log"; die "the generation stage would not configure"; }
 cmake --build td-native -j "$NPROC" > "$ROOT/td-native-build.log" 2>&1 \
@@ -181,6 +183,10 @@ fi
 log "packing the Java API"
 mkdir -p src/org/drinkless/tdlib classes "$ROOT/$OUT_DIR"
 cp "$TD_API_JAVA" src/org/drinkless/tdlib/TdApi.java
+if grep -q "androidx" src/org/drinkless/tdlib/TdApi.java; then
+  echo "::error::TdApi.java still references androidx, so php was not skipped; the desktop bindings must be generated without its annotations"
+  die "the generated Java API came out annotated for Android"
+fi
 cp td/example/java/org/drinkless/tdlib/Client.java src/org/drinkless/tdlib/Client.java
 show_javac_context() {
   # javac names a line and nothing else; the generator's output is 40k lines, so the lines around the
