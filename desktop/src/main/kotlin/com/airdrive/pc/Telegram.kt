@@ -316,11 +316,13 @@ class TelegramSession(
                 if (path.startsWith("c/")) {
                     val digits = path.removePrefix("c/").substringBefore('/').filter { it.isDigit() }
                     val id = digits.toLongOrNull() ?: throw TelegramException(0, "that link has no chat id in it")
-                    return ResolvedChat(requireChat(-1_000_000_000_000L - id), "chat from the link")
+                    val opened = requireChat(-1_000_000_000_000L - id)
+                    return ResolvedChat(opened.id, opened.title.orEmpty().ifBlank { "chat from the link" })
                 }
                 val info = request(TdApi.CheckChatInviteLink().apply { inviteLink = "https://t.me/$path" }, 30)
                 if (info is TdApi.ChatInviteLinkInfo && info.chatId != 0L) {
-                    return ResolvedChat(requireChat(info.chatId), "chat from the invite link")
+                    val invited = requireChat(info.chatId)
+                    return ResolvedChat(invited.id, invited.title.orEmpty().ifBlank { "chat from the invite link" })
                 }
                 val joined = request(TdApi.JoinChatByInviteLink().apply { inviteLink = "https://t.me/$path" }, 30)
                 if (joined is TdApi.Chat) return ResolvedChat(joined.id, joined.title)
@@ -332,7 +334,8 @@ class TelegramSession(
         if (digits.isEmpty()) throw TelegramException(0, "not a chat id, @username or t.me link")
         val asLong = digits.toLongOrNull() ?: throw TelegramException(0, "that number is too large to be a chat id")
         val id = if (text.startsWith("-") || asLong >= 1_000_000_000_000L) -asLong else -1_000_000_000_000L - asLong
-        return ResolvedChat(requireChat(id), "chat $id")
+        val chat = requireChat(id)
+        return ResolvedChat(chat.id, chat.title.orEmpty().ifBlank { "chat $id" })
     }
 
     private fun looksLikeUsername(text: String): Boolean =
