@@ -46,6 +46,34 @@ Two bare paths are read as source then destination, which is enough for a quick 
 `--source` and `--exclude` arguments is allowed. Exit code is 0 when the walk finished, whether or
 not individual files failed — the log names every failure instead of stopping the run.
 
+## Backing up to Telegram instead of a folder
+
+```
+airdrive-pc --source "D:/Photos" --dest "E:/Backup" --tg --tg-chat @airdrive_photos --api-id 123456 --api-hash abc123
+airdrive-pc --source "D:/Photos" --dest "E:/Backup" --tg --tg-create "AirDrive PC" --dry-run
+```
+
+`--tg` uploads each file as a document to the chat you name — a channel id, `-100…`, `@username`, a
+`t.me/…` link, or nothing at all for Saved Messages — instead of copying it anywhere. The rules are the
+same ones the folder backup uses: the same exclusions, the same `--only` list, the same skipped hidden
+folders, and the same record file in `--dest`, which is why a second run only looks at what changed. The
+record notes the chat and message id of each upload (`tg:<chat>:<message>`) rather than a path.
+
+First run signs in like any other Telegram client: it asks for your phone number, then the code Telegram
+sends, then your two-step password if you have one. That needs your own `api_id` and `api_hash`, from
+<https://my.telegram.org>, and they can come from the `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`
+environment instead of the command line, where they would sit in a shell history. The login then lives
+in `<dest>/.airdrive-telegram`, so the next run is already signed in — which is also why a run that is
+interrupted can be started again without doing anything twice. Files over 2 GB are skipped unless you
+set a smaller `--max-mb`: that is Telegram's own limit for a normal account.
+
+The window does not do Telegram yet; it is a command-line option for now.
+
+Building this needs TDLib's generated Java API, which tdlib/td publishes nowhere: it is cross-built by
+`tools/build-tdlib-windows.sh` in CI and committed as `libs/tdlib.jar`, and `tools/fetch-tdlib-windows.sh`
+brings back the native bridge (`tdjni.dll`) that the upload actually talks to Telegram with. Without that
+DLL the program still builds and backs up to folders; `--tg-probe` tells you which half it has.
+
 ## How it decides what to copy
 
 Half-written copies never sit beside your files: they are written into `.airdrive-tmp` in the

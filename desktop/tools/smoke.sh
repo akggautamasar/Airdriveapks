@@ -7,6 +7,15 @@ set -u
 LAUNCH=("$@")
 if [ "${#LAUNCH[@]}" -eq 0 ]; then echo "usage: smoke.sh <launcher> [args...]"; exit 2; fi
 
+# A trailing --expect-tdlib means "this build was packaged with TDLib's bridge next to it, so the
+# Telegram half has to actually load". Nothing else in the script depends on it.
+EXPECT_TD=0
+last="${LAUNCH[${#LAUNCH[@]}-1]}"
+if [ "$last" = "--expect-tdlib" ]; then
+  EXPECT_TD=1
+  LAUNCH=("${LAUNCH[@]:0:${#LAUNCH[@]}-1}")
+fi
+
 work=$(mktemp -d) || exit 1
 cd "$work" || exit 1
 trap 'cd /; rm -rf "$work"' EXIT
@@ -52,6 +61,13 @@ if [ $? -ne 0 ] || ! grep -qi "dry-run" help.log; then
   exit 1
 fi
 echo "ok   the launcher runs"
+
+# 0b. the native half, when it was meant to be in the package
+if [ "$EXPECT_TD" = 1 ]; then
+  run --tg-probe || fail "--tg-probe exited non-zero"
+  grep -q "probe ok" run.log || fail "the packaged app cannot load TDLib's JNI bridge: $(tail -3 run.log | tr '\n' ' ')"
+  echo "ok   the packaged app loads the TDLib bridge and the generated API"
+fi
 
 # 1. a dry run must not touch the disk at all
 run --source src --dest dst --dry-run || fail "dry run exited non-zero"

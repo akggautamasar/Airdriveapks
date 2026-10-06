@@ -26,7 +26,9 @@ data class Options(
     val maxFileBytes: Long,
     val skipHidden: Boolean,
     val dryRun: Boolean,
-    val verify: Boolean
+    val verify: Boolean,
+    /** When set, files are uploaded to Telegram instead of copied into `destination`. */
+    val telegram: TelegramTarget? = null
 )
 
 /** Live counters plus a rolling log, read by the window while the walk is running. */
@@ -328,6 +330,45 @@ class BackupEngine(
     }
 
     /**
+     * One file to Telegram. Nothing is written beside it: the record file is the only local thing an
+     * upload touches, which is why an interrupted run simply uploads the same file again next time.
+     */
+    private fun uploadOne(
+        source: Path,
+        key: String,
+        size: Long,
+        modifiedMillis: Long,
+        manifest: Manifest,
+        telegram: TelegramTarget
+    ) {
+        if (options.dryRun) {
+            report.copied.incrementAndGet()
+            report.bytes.addAndGet(size)
+            report.note("would upload " + Fmt.bytes(size) + "  " + source)
+            return
+        }
+        val caption = "AirDrive PC\n" + key
+        try {
+            val messageId = telegram.session.upload(source, telegram.chatId, caption, size)
+            manifest.remember(key, "tg:" + telegram.chatId + ":" + messageId, size, modifiedMillis)
+            report.copied.incrementAndGet()
+            report.bytes.addAndGet(size)
+            report.note("uploaded " + Fmt.bytes(size) + "  " + source)
+            copiesSinceSave++
+            // An upload costs far more than a save of a few thousand lines, so the record goes to disk
+            // after every single one.
+            copiesSinceSave = 0
+            manifest.save()
+        } catch (e: TelegramException) {
+            report.failed.incrementAndGet()
+            report.note("could not upload " + source + ": " + (e.message ?: "Telegram error " + e.code))
+        } catch (e: Exception) {
+            report.failed.incrementAndGet()
+            report.note("could not upload " + source + ": " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    /**
      * The name the last run used for this file, when it is still inside the destination; otherwise the
      * name the current rules give it. Without this, a file that had to be renamed to avoid a clash
      * would get a second copy beside the first on every change after that.
@@ -369,6 +410,11 @@ class BackupEngine(
         modifiedMillis: Long,
         manifest: Manifest
     ) {
+        val telegram = options.telegram
+        if (telegram != null) {
+            uploadOne(source, key, size, modifiedMillis, manifest, telegram)
+            return
+        }
         if (options.dryRun) {
             report.copied.incrementAndGet()
             report.bytes.addAndGet(size)

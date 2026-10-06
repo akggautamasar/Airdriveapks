@@ -1,0 +1,5 @@
+/build/
+/.gradle/
+/libs/native/
+/libs/unpacked/
+/local.properties
