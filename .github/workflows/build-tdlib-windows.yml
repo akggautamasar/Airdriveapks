@@ -1,0 +1,92 @@
+name: Build TDLib for Windows
+
+# tdlib/td publishes no binaries, so the native half of "back up from a PC to Telegram" has to be
+# compiled here. The TDLib commit is the one the phone app pins, so both sides speak the same
+# protocol version and get the same generated field names. Output: a release holding tdjson.dll,
+# tdjni.dll and the typed TdApi jar to drop into desktop/.
+
+on:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - ".github/workflows/build-tdlib-windows.yml"
+      - "desktop/tools/build-tdlib-windows.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tdlib-win-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  crossbuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout AirDrive
+        uses: actions/checkout@v4
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mingw-w64 ninja-build zip unzip file perl autoconf libtool
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cross-build TDLib for Windows
+        run: |
+          set +e
+          bash desktop/tools/build-tdlib-windows.sh 2>&1 | tee tdlib-build.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            # One annotation per interesting line: runner logs are not readable from outside,
+            # annotations are.
+            grep -E "FAILED:|error:|Error [0-9]|undefined reference|CMake Error|No such file" tdlib-build.log \
+              | tail -30 | sed 's/\r$//' | while IFS= read -r line; do
+                echo "::error::${line}"
+              done
+            echo "::error::last 25 lines follow"
+            tail -25 tdlib-build.log | sed 's/\r$//' | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            exit "$rc"
+          fi
+
+      - name: Report the artefact
+        if: always()
+        run: |
+          if [ -f tdlib-win/tdlib-windows-x86_64.zip ]; then
+            ls -l tdlib-win/tdlib-windows-x86_64.zip
+            unzip -l tdlib-win/tdlib-windows-x86_64.zip | sed 's/^/[tdlib-win] /'
+          else
+            echo "no zip; per-stage logs:"
+            ls -l tdlib-win/*.log 2>/dev/null
+            for f in tdlib-win/*.log; do
+              [ -f "$f" ] || continue
+              echo "===== $f (last 15 lines) ====="
+              tail -15 "$f"
+            done
+          fi
+
+      - name: Publish as a release
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="tdlib-win-$SHA"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --prerelease \
+              --title "TDLib for Windows x86_64 ($SHA)" \
+              --notes "Built by desktop/tools/build-tdlib-windows.sh from TDLib $SHA of the pinned commit: tdjson.dll, tdjni.dll, tdlib.jar (org.drinkless.tdlib.TdApi / Client) and the CMake package. Static against OpenSSL, so the DLLs need nothing else."
+          fi
+          gh release upload "$TAG" tdlib-win/tdlib-windows-x86_64.zip --clobber
+          echo "Download: https://github.com/akggautamasar/Airdriveapks/releases/download/$TAG/tdlib-windows-x86_64.zip"

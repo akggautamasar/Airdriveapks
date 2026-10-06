@@ -18,12 +18,22 @@ echo hello > src/photos/2024/c.txt
 echo no > src/skipme/s.txt
 echo hid > src/.hidden/h.txt
 
+ann() { printf '::error::%s\n' "$(printf '%s' "$*" | tr -d '\r' | sed 's/%/%25/g')"; }
+
 fail() {
   echo "SMOKE FAIL: $*"
-  echo "--- last run ---"
-  tail -12 run.log 2>/dev/null
+  ann "SMOKE FAIL: $*"
+  echo "--- the run that was doing it (full) ---"
+  cat run.log 2>/dev/null
   echo "--- destination ---"
-  find dst -type f 2>/dev/null | head -30
+  find dst dst2 -type f 2>/dev/null | head -30
+  # Runner logs are not readable from outside this repo's CI, annotations are: repeat the evidence
+  # where somebody with only the API can see it.
+  n=0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    [ "$n" -le 12 ] && ann "output $n of last run: $line"
+  done < <(tail -12 run.log 2>/dev/null)
   exit 1
 }
 
@@ -31,6 +41,17 @@ run() {
   "${LAUNCH[@]}" "$@" > run.log 2>&1
   return $?
 }
+
+# 0. the launcher, not the logic: if this fails nothing else can be trusted
+"${LAUNCH[@]}" --help > help.log 2>&1
+if [ $? -ne 0 ] || ! grep -qi "dry-run" help.log; then
+  echo "--- --help ---"; cat help.log
+  ann "the launcher cannot even print its help; see the annotations after this one"
+  n=0
+  while IFS= read -r line; do n=$((n + 1)); [ "$n" -le 10 ] && ann "help: $line"; done < help.log
+  exit 1
+fi
+echo "ok   the launcher runs"
 
 # 1. a dry run must not touch the disk at all
 run --source src --dest dst --dry-run || fail "dry run exited non-zero"
