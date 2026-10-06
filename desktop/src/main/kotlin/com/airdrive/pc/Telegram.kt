@@ -410,7 +410,9 @@ class TelegramSession(
             TdApi.SendMessage().apply {
                 this.chatId = chatId
                 inputMessageContent = content
-                disableNotification = true
+                // A backup channel that pings for every file is a channel nobody keeps. This version
+                // of TDLib puts it on the send options rather than on the message.
+                options = TdApi.MessageSendOptions().apply { disableNotification = true }
             },
             120
         )
