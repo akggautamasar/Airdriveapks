@@ -116,12 +116,15 @@ fun StorageAccessScreen(nav: NavHostController, onboarding: Boolean = false) {
                 }
             }
 
-            SectionTitle("Included folders")
+            SectionTitle("Folders")
             ActionCard(Icons.Default.FolderOpen, "Included folders", if (wholeDevice) "All folders on internal storage" else "Only selected folders", StorageGreen, StorageGreenLight) {
                 nav.navigate(Routes.FOLDER_SELECT)
             }
+            // Was a second copy of the include screen: choosing a folder there granted AirDrive
+            // access to it instead of keeping it out, and the persistable-grant call on that screen's
+            // result was the crash. Exclusions are path rules, so this now opens them in that mode.
             ActionCard(Icons.Default.Block, "Excluded folders", "Keep private folders out of backup", StorageRed, StorageRedLight) {
-                nav.navigate(Routes.FOLDER_SELECT)
+                nav.navigate(Routes.FOLDER_EXCLUDE)
             }
 
             SectionTitle("File types")

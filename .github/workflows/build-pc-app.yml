@@ -1,0 +1,89 @@
+name: Build PC app
+
+# The desktop module needs a JDK and nothing else, so this is a short job: it builds the portable
+# distribution and a self-contained Windows app image, then attaches both to a prerelease.
+on:
+  push:
+    branches: [ "arena/**", "main" ]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/build-pc-app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-pc-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout AirDrive
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: pc-gradle-${{ hashFiles('desktop/**.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            pc-gradle-
+            gradle-
+
+      # Same rule as the phone workflow: the Actions log host is not reachable from everywhere, so
+      # whatever the compiler says is repeated here as a check annotation.
+      - name: Build the desktop distribution
+        shell: bash
+        run: |
+          set +e
+          sh gradlew --no-daemon -p desktop installDist distZip > pc-build.log 2>&1
+          status=$?
+          set -e
+          # Gradle's "What went wrong" block is at the end of the log, and the log itself is only
+          # readable in the Actions UI, so both the compiler lines and the tail come back as
+          # annotations - one look at the failed run is enough to fix it.
+          ERR=$(grep -E "^e: |^error:|Unresolved reference" pc-build.log | head -30 | tr '\n' '|' | sed 's/::/-/g' || true)
+          TAIL=$(tail -25 pc-build.log | tr '\n' '|' | sed 's/::/-/g' || true)
+          if [ "$status" -ne 0 ]; then
+            echo "::error::compile errors: ${ERR:0:1900}"
+            echo "::error::log tail (exit $status): ${TAIL:0:1900}"
+            exit "$status"
+          fi
+          ls -l desktop/build/distributions desktop/build/install/airdrive-pc/lib
+
+      - name: Package a self-contained Windows app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path pc-out, pc-out/jar | Out-Null
+          Copy-Item desktop/build/install/airdrive-pc/lib/*.jar pc-out/jar/
+          jpackage --type app-image --name AirDrive-PC --input pc-out/jar `
+            --main-jar airdrive-pc.jar --dest pc-out/image --vendor AirDrive `
+            --java-options "-Dsun.java2d.uiScale=2.0"
+          Compress-Archive -Path pc-out/image/AirDrive-PC -DestinationPath pc-out/AirDrive-PC-windows.zip -Force
+          Get-ChildItem pc-out | Format-Table Name, Length
+
+      - name: Publish as release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          TAG="pc-$SHORT"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "AirDrive for PC $SHORT" \
+            --notes "PC build of commit $SHORT. **AirDrive-PC-windows.zip** holds a self-contained Windows app (no Java needed): unzip it and run \`AirDrive-PC/AirDrive-PC.exe\`. **airdrive-pc.zip** is the portable build for any machine with Java 17 or newer - unzip it and run \`airdrive-pc/bin/airdrive-pc.bat\` on Windows or \`airdrive-pc/bin/airdrive-pc\` on macOS and Linux; pass --help for the command line. Both do the same job: back up the folders you list into one destination, skipping the paths and oversized files you tell it to, and remembering what it already stored so the next run only looks at what changed. Nothing outside the destination is modified or deleted. See desktop/README.md."
+          gh release upload "$TAG" pc-out/AirDrive-PC-windows.zip --clobber
+          gh release upload "$TAG" desktop/build/distributions/airdrive-pc.zip --clobber
+          echo "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG"

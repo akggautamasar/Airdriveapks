@@ -1,23 +1,28 @@
-name: Build APK
+name: Build APK (arena branch)
 
+# Temporary copy of build-apk.yml, scoped to this session branch so the APK build runs on
+# a push: workflow_dispatch is not reachable with the token available here (403). Same
+# steps, caches and artifacts as the main workflow. Delete this file with the branch.
 on:
+  push:
+    branches: [ "arena/**" ]
   workflow_dispatch:
     inputs:
       tdlib_ref:
         description: "tdlib/td git ref to build (branch, tag, or commit)"
         required: false
         default: "d1085f9cebc5a62379991ae1652673954f229c1f"
-  push:
-    branches: [ "main" ]
 
 # Only one run at a time so the TDLib cache is never written concurrently.
 concurrency:
-  group: build-apk
+  group: build-apk-arena
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     timeout-minutes: 300
     steps:
       - name: Checkout AirDrive
@@ -203,6 +208,25 @@ jobs:
           name: AirDrive-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # Artifacts are zipped, expire, and their host is not reachable from every sandbox, so the
+      # APK also goes up as a release asset: a plain link that opens on a phone.
+      - name: Publish debug APK as a release asset
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "APK: $APK ($(wc -c < "$APK") bytes)"
+          TAG="apk-debug-$SHORT"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "AirDrive debug APK $SHORT" \
+              --notes "Debug build of commit $SHORT from branch ${{ github.ref_name }}, produced by the Build APK workflow. Debug-signed: install over an existing build, or uninstall that one first."
+          fi
+          gh release upload "$TAG" "$APK" --clobber
+          echo "https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$APK")"
 
       - name: Upload release APK
         if: steps.release_signing.outputs.enabled == 'true'

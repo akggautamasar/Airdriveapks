@@ -69,6 +69,8 @@ fun BackupSettingsScreen(nav: NavHostController) {
     var networkDialog by remember { mutableStateOf(false) }
     var scheduleDialog by remember { mutableStateOf(false) }
     var themeDialog by remember { mutableStateOf(false) }
+    /** The thumb while the slider is being dragged; null again once the value has been saved. */
+    var frequencyDraft by remember { mutableStateOf<Float?>(null) }
     val autoBackup by settings.autoBackupEnabled.collectAsState(initial = true)
     val networkPolicy by settings.networkPolicy.collectAsState(initial = NetworkPolicy.WIFI_ONLY)
     val chargingOnly by settings.chargingOnly.collectAsState(initial = false)
@@ -82,7 +84,13 @@ fun BackupSettingsScreen(nav: NavHostController) {
     val enabledCategories by settings.enabledCategories.collectAsState(initial = BackupCategory.values().toSet())
     var hasAccess by remember { mutableStateOf(StorageAccess.hasFullAccess(context)) }
     OnResumeEffect { hasAccess = StorageAccess.hasFullAccess(context) }
-    fun reschedule() = scope.launch { WorkScheduler.rescheduleAutoBackup(context) }
+    /**
+     * Writes a setting and rebuilds the periodic run from it in one coroutine. The schedule is
+     * built from these very values, so starting the write and the reschedule side by side can
+     * enqueue the previous ones — the periodic backup then keeps the old constraints, or keeps
+     * running after Automatic backup has been switched off.
+     */
+    fun setAndReschedule(write: suspend () -> Unit) = scope.launch { write(); WorkScheduler.rescheduleAutoBackup(context) }
 
     Scaffold(
         containerColor = Page,
@@ -101,18 +109,18 @@ fun BackupSettingsScreen(nav: NavHostController) {
             SettingHero(autoBackup)
             SectionLabel("Automatic backup")
             ModernSettingCard {
-                SettingSwitchRow(Icons.Default.SettingsBackupRestore, Blue, BlueLight, "Automatic backup", "Keep your files safe automatically", autoBackup) { scope.launch { settings.setAutoBackupEnabled(it) }; reschedule() }
+                SettingSwitchRow(Icons.Default.SettingsBackupRestore, Blue, BlueLight, "Automatic backup", "Keep your files safe automatically", autoBackup) { setAndReschedule { settings.setAutoBackupEnabled(it) } }
                 Divider()
                 SettingLinkRow(Icons.Default.NetworkWifi, Blue, BlueLight, "Upload over", networkLabel(networkPolicy)) { networkDialog = true }
-                SettingSwitchRow(Icons.Default.BatteryChargingFull, Green, GreenLight, "Charging only", "Only back up while charging", chargingOnly) { scope.launch { settings.setChargingOnly(it) }; reschedule() }
-                SettingSwitchRow(Icons.Default.Lightbulb, Green, GreenLight, "Battery-conscious mode", "Pause backup when battery is low", batteryConscious) { scope.launch { settings.setBatteryConscious(it) }; reschedule() }
+                SettingSwitchRow(Icons.Default.BatteryChargingFull, Green, GreenLight, "Charging only", "Only back up while charging", chargingOnly) { setAndReschedule { settings.setChargingOnly(it) } }
+                SettingSwitchRow(Icons.Default.Lightbulb, Green, GreenLight, "Battery-conscious mode", "Pause backup when battery is low", batteryConscious) { setAndReschedule { settings.setBatteryConscious(it) } }
                 SettingSwitchRow(Icons.Default.Refresh, Orange, OrangeLight, "Retry failed files", "Automatically retry failed uploads", autoRetry) { scope.launch { settings.setAutoRetryFailed(it) } }
             }
             SectionLabel("Schedule & limits")
             ModernSettingCard {
                 SettingLinkRow(Icons.Default.Schedule, Blue, BlueLight, "Backup schedule", "Every ${frequency} hours") { scheduleDialog = true }
                 SettingLinkRow(Icons.Default.Bolt, Purple, PurpleLight, "Small files", if (includeSmall) "Included" else "Excluded") { scope.launch { settings.setIncludeSmallFiles(!includeSmall) } }
-                Slider(value = frequency.toFloat(), onValueChange = { scope.launch { settings.setBackupFrequencyHours(it.toLong().coerceIn(1L, 24L)) } }, onValueChangeFinished = { reschedule() }, valueRange = 1f..24f, steps = 22, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp), colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue))
+                Slider(value = frequencyDraft ?: frequency.toFloat(), onValueChange = { frequencyDraft = it }, onValueChangeFinished = { val picked = (frequencyDraft ?: frequency.toFloat()).toLong().coerceIn(1L, 24L); frequencyDraft = null; setAndReschedule { settings.setBackupFrequencyHours(picked) } }, valueRange = 1f..24f, steps = 22, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp), colors = SliderDefaults.colors(thumbColor = Blue, activeTrackColor = Blue))
             }
             SectionLabel("Storage")
             ModernSettingCard {
@@ -192,15 +200,15 @@ fun BackupSettingsScreen(nav: NavHostController) {
 
     if (networkDialog) {
         AlertDialog(onDismissRequest = { networkDialog = false }, title = { Text("Upload over") }, text = { Column {
-            NetworkChoice("Wi-Fi only", NetworkPolicy.WIFI_ONLY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }
-            NetworkChoice("Wi-Fi or mobile data, not roaming", NetworkPolicy.NOT_ROAMING, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }
-            NetworkChoice("Any connection", NetworkPolicy.ANY, networkPolicy) { scope.launch { settings.setNetworkPolicy(it) }; reschedule(); networkDialog = false }
+            NetworkChoice("Wi-Fi only", NetworkPolicy.WIFI_ONLY, networkPolicy) { networkDialog = false; setAndReschedule { settings.setNetworkPolicy(it) } }
+            NetworkChoice("Wi-Fi or mobile data, not roaming", NetworkPolicy.NOT_ROAMING, networkPolicy) { networkDialog = false; setAndReschedule { settings.setNetworkPolicy(it) } }
+            NetworkChoice("Any connection", NetworkPolicy.ANY, networkPolicy) { networkDialog = false; setAndReschedule { settings.setNetworkPolicy(it) } }
         } }, confirmButton = {})
     }
     if (scheduleDialog) {
         AlertDialog(onDismissRequest = { scheduleDialog = false }, title = { Text("Backup schedule") }, text = { Column {
             listOf(1L, 2L, 6L, 12L, 24L).forEach { hours ->
-                Row(Modifier.fillMaxWidth().clickable { scope.launch { settings.setBackupFrequencyHours(hours) }; reschedule(); scheduleDialog = false }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().clickable { scheduleDialog = false; setAndReschedule { settings.setBackupFrequencyHours(hours) } }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(hours == frequency, null)
                     Text("Every ${hours} hours", Modifier.padding(start = 8.dp))
                 }

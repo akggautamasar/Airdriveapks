@@ -2,6 +2,7 @@ package com.airdrive.backup.data.backup
 
 import com.airdrive.backup.data.db.BackupCategory
 import com.airdrive.backup.data.db.FileRecord
+import com.airdrive.backup.data.db.LocalState
 import com.airdrive.backup.data.db.UploadStatus
 import com.airdrive.backup.data.prefs.ApiCredentials
 import com.airdrive.backup.data.prefs.DestinationMode
@@ -135,7 +136,16 @@ data class BackupManifest(
     }
 }
 
-/** Turns a restored [ManifestEntry] into a FileRecord row already marked UPLOADED. */
+/**
+ * Turns a restored [ManifestEntry] into a FileRecord row already marked UPLOADED.
+ *
+ * The row has no path on this phone — the uri is the synthetic "restored://" one — so it is marked
+ * [LocalState.UNKNOWN] exactly like [com.airdrive.backup.data.backup.TelegramChannelSync] marks the
+ * rows it imports from Telegram, and exactly like the database's own v1→v2 migration backfills
+ * older copies of these rows. Leaving it at the default PRESENT claims bytes that are not there:
+ * the scan never revisits "restored://" rows, so Storage cleanup, the "still on this phone" counts
+ * and Share would all keep believing the file is local.
+ */
 fun ManifestEntry.toUploadedRecord(): FileRecord = FileRecord(
     uri = "restored://$fingerprint",
     displayName = displayName,
@@ -146,5 +156,6 @@ fun ManifestEntry.toUploadedRecord(): FileRecord = FileRecord(
     status = UploadStatus.UPLOADED,
     destinationChannelId = chatId,
     telegramMessageId = messageId,
-    uploadedAtMillis = uploadedAtMillis
+    uploadedAtMillis = uploadedAtMillis,
+    localState = LocalState.UNKNOWN
 )

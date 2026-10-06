@@ -88,11 +88,12 @@ fun GalleryScreen(nav: NavHostController) {
     var busy by remember { mutableStateOf(false) }
 
     val categoryNames = remember(kind) { kind.categories.map { it.name } }
+    val galleryStatus = if (onlyBackedUp) "UPLOADED" else ""
     val files by remember(categoryNames, query, onlyBackedUp) {
-        dao.galleryFlow(categoryNames, query.trim(), onlyBackedUp, GALLERY_LIMIT)
+        dao.galleryFlow(categoryNames, query.trim(), galleryStatus, GALLERY_LIMIT)
     }.collectAsState(initial = emptyList())
     val total by remember(categoryNames, onlyBackedUp) {
-        dao.galleryCountFlow(categoryNames, onlyBackedUp)
+        dao.galleryCountFlow(categoryNames, galleryStatus)
     }.collectAsState(initial = 0)
     val restore by repository.restoreState.collectAsState()
 
