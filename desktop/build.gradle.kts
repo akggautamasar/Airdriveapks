@@ -25,22 +25,15 @@ if (!tdlibJar.isFile) {
     )
 }
 
-// The native half is tens of megabytes, so it is not committed; CI takes tdjni.dll out of the TDLib
-// release before packaging. A build without it still compiles and runs: uploading then reports itself
-// unavailable, which --tg-probe is there to show.
-val tdlibNative = file("libs/native")
-
+// The native half is tens of megabytes, so it is not committed; the packaging step takes tdjni.dll out
+// of the TDLib release and puts it beside the jar, which is where the code looks for it. A build
+// without it still compiles and still backs up to folders; uploading reports itself unavailable, which
+// is what --tg-probe is there to say out loud.
 dependencies {
+    // The one jar in this build, and it is generated from a pinned source rather than fetched: no
+    // repository is consulted for it. Everything else is JDK Swing and java.nio, no tests, so the jar
+    // is the whole deliverable.
     implementation(files(tdlibJar))
-}
-
-if (tdlibNative.isDirectory) {
-    tasks.named("installDist") {
-        from(tdlibNative) { into("lib") }
-    }
-    tasks.named("distZip") {
-        from(tdlibNative) { into("airdrive-pc/lib") }
-    }
 }
 
 application {
