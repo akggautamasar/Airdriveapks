@@ -1,0 +1,104 @@
+name: Release APK
+
+on:
+  push:
+    branches: ["main"]
+    paths: [".github/workflows/release-apk.yml"]
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: "Successful main-branch Build APK run to publish"
+        required: true
+        default: "42786883160"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-apk
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 310
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id || '42786883160' }}
+    steps:
+      - name: Validate and wait for requested build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN_ID" > build.json
+          jq -e '.head_branch == "main" and .path == ".github/workflows/build-apk.yml" and .event == "push"' build.json
+          BUILD_SHA=$(jq -r .head_sha build.json)
+          echo "sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
+          gh run watch "$BUILD_RUN_ID" --exit-status --interval 30
+
+      - name: Check release source matches the APK
+        env:
+          BUILD_SHA: ${{ steps.build.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The release workflow may be newer; application and build sources must match.
+          gh api "repos/$GH_REPO/compare/$BUILD_SHA...$GITHUB_SHA" > comparison.json
+          jq -e '[.files[] | select(.filename | startswith(".github/workflows/") | not)] | length == 0' comparison.json
+
+      - name: Download and verify APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN_ID/artifacts" > artifacts.json
+          if jq -e '.artifacts[] | select(.name == "AirDrive-release-apk" and .expired == false)' artifacts.json >/dev/null; then
+            ARTIFACT=AirDrive-release-apk
+            APK_NAME=AirDrive-cloud-drive.apk
+            echo "preview=false" >> "$GITHUB_OUTPUT"
+          else
+            ARTIFACT=AirDrive-debug-apk
+            APK_NAME=AirDrive-cloud-drive-debug.apk
+            echo "preview=true" >> "$GITHUB_OUTPUT"
+          fi
+          gh run download "$BUILD_RUN_ID" --name "$ARTIFACT" --dir downloaded
+          mapfile -t APKS < <(find downloaded -type f -name '*.apk')
+          test "${#APKS[@]}" -eq 1
+          mkdir dist
+          cp "${APKS[0]}" "dist/$APK_NAME"
+          unzip -t "dist/$APK_NAME"
+          unzip -l "dist/$APK_NAME" | awk '/lib\/arm64-v8a\/libtdjni.so/ { found=1 } END { exit !found }'
+          (cd dist && sha256sum "$APK_NAME" > SHA256SUMS.txt)
+
+      - name: Publish GitHub release
+        env:
+          BUILD_SHA: ${{ steps.build.outputs.sha }}
+          PREVIEW: ${{ steps.apk.outputs.preview }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="cloud-drive-$BUILD_RUN_ID"
+          {
+            echo "AirDrive cloud drive: Android file-picker access, on-demand Telegram reads, thumbnails, search, and copy-in uploads."
+            echo
+            echo "APK source commit: $BUILD_SHA"
+            echo "Successful build: https://github.com/$GH_REPO/actions/runs/$BUILD_RUN_ID"
+            echo
+            echo "Compilation verified by GitHub Actions. Samsung device testing remains pending."
+            if [ "$PREVIEW" = true ]; then
+              echo
+              echo "Debug-signed preview APK. Existing installations with a different signing certificate cannot update in place."
+            fi
+          } > release-notes.md
+          OPTIONS=()
+          if [ "$PREVIEW" = true ]; then OPTIONS+=(--prerelease); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "AirDrive Cloud Drive" --notes-file release-notes.md "${OPTIONS[@]}"
+          fi
+          echo "Release: https://github.com/$GH_REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
