@@ -50,7 +50,7 @@ jobs:
 
       - name: Cache built TDLib
         id: tdlib_cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: td-src/example/android/tdlib
           key: tdlib-android-${{ steps.tdlib_ref.outputs.sha }}
@@ -73,6 +73,13 @@ jobs:
             --build-arg TDLIB_INTERFACE=Java \
             --output tdlib \
             .
+
+      - name: Save built TDLib before compiling the app
+        if: steps.tdlib_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: td-src/example/android/tdlib
+          key: tdlib-android-${{ steps.tdlib_ref.outputs.sha }}
 
       - name: Inspect TDLib Docker build output
         run: |
@@ -107,15 +114,21 @@ jobs:
             echo "::error::No libtdjni.so/libtdjson.so files found anywhere under $ROOT"
             exit 1
           fi
-          JAVA_SRC_DIR=$(find "$ROOT" -type d -path "*/org/drinkless/tdlib" | head -n1)
+          JAVA_API=$(find "$ROOT" -type f -path "*/org/drinkless/tdlib/TdApi.java" -print -quit)
+          JAVA_SRC_DIR=""
+          if [ -n "$JAVA_API" ]; then JAVA_SRC_DIR=$(dirname "$JAVA_API"); fi
           if [ -z "$JAVA_SRC_DIR" ]; then
             echo "::error::Could not find a generated org/drinkless/tdlib Java source directory under $ROOT"
             exit 1
           fi
+          test -s "$JAVA_SRC_DIR/TdApi.java" || { echo "::error::Generated TdApi.java is missing"; exit 1; }
+          test -s "$JAVA_SRC_DIR/Client.java" || { echo "::error::Generated Client.java is missing"; exit 1; }
           PACKAGE_ROOT=$(dirname "$(dirname "$(dirname "$JAVA_SRC_DIR")")")
           mkdir -p app/src/main/java
           rm -rf app/src/main/java/org
           cp -r "$PACKAGE_ROOT/org" app/src/main/java/org
+          test -s app/src/main/java/org/drinkless/tdlib/TdApi.java
+          test -s app/src/main/java/org/drinkless/tdlib/Client.java
           echo "Vendored $SO_COUNT libtdjni/libtdjson file(s) across ABIs"
           find app/src/main/java/org -maxdepth 4 -type f -name "*.java"
 

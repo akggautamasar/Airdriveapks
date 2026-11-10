@@ -1,9 +1,10 @@
 name: Release APK
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Build APK"]
+    types: [completed]
     branches: ["main"]
-    paths: [".github/workflows/release-apk.yml"]
   workflow_dispatch:
     inputs:
       build_run_id:
@@ -21,12 +22,13 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 310
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      BUILD_RUN_ID: ${{ inputs.build_run_id || '42786883160' }}
+      BUILD_RUN_ID: ${{ github.event.workflow_run.id || inputs.build_run_id }}
     steps:
       - name: Validate and wait for requested build
         id: build
