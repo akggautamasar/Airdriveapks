@@ -67,6 +67,7 @@ fun SettingsOverviewScreen(nav: NavHostController) {
                 SettingsRow("Backup", "Automatic backup, schedule and file types", Icons.Default.Folder, Blue, BlueLight) { nav.navigate(Routes.BACKUP_SETTINGS) }
                 SettingsRow("Storage", "Permissions and scan locations", Icons.Default.Folder, Green, GreenLight) { nav.navigate(Routes.STORAGE_ACCESS) }
                 SettingsRow("Telegram", "Connection and backup destination", Icons.Default.Send, Blue, BlueLight) { nav.navigate(Routes.TELEGRAM_SETTINGS) }
+                SettingsRow("Cloud drive", "Open your backed-up files in the Files app, streamed from Telegram", Icons.Default.Cloud, Purple, PurpleLight) { nav.navigate(Routes.CLOUD_DRIVE) }
             }
             if (quantEnabled) {
                 SettingsGroup("Private tools") {

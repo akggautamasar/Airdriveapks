@@ -88,6 +88,7 @@ object Routes {
     const val NETWORK = "network"
     const val FILE_VIEWER = "file_viewer"
     const val QUANTXDRIVE = "quantxdrive"
+    const val CLOUD_DRIVE = "cloud_drive"
 }
 
 private data class BottomTab(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
@@ -142,6 +143,7 @@ fun AppNav(deepLinkRoute: String? = null) {
             composable(Routes.BACKUP_SETTINGS) { BackupSettingsScreen(navController) }
             composable(Routes.ADVANCED_SETTINGS) { AdvancedSettingsScreen(navController) }
             composable(Routes.SETTINGS) { SettingsOverviewScreen(navController) }
+            composable(Routes.CLOUD_DRIVE) { CloudDriveScreen(navController) }
             composable(Routes.SECURITY_PRIVACY) { SecurityPrivacyScreen(navController) }
             composable(Routes.APP_LOCK) { AppLockSettingsScreen(navController) }
             composable(Routes.NOTIFICATIONS) { NotificationsSettingsScreen(navController) }

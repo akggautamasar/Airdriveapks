@@ -3,10 +3,14 @@
     <cloud-backup>
         <exclude domain="sharedpref" path="tdlib_session.xml" />
         <exclude domain="file" path="tdlib" />
+        <exclude domain="file" path="tdlib-files" />
+        <exclude domain="file" path="cloud-inbox" />
         <exclude domain="database" path="airdrive.db" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="tdlib_session.xml" />
         <exclude domain="file" path="tdlib" />
+        <exclude domain="file" path="tdlib-files" />
+        <exclude domain="file" path="cloud-inbox" />
     </device-transfer>
 </data-extraction-rules>

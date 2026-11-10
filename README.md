@@ -36,6 +36,16 @@ talks straight to Telegram using your own Telegram API keys.
   *7 files failed — tap to review*, or *Backup paused — waiting for charging* with how far
   it got before it stopped
 
+### Cloud drive (Helumi-style)
+
+- **AirDrive shows up in the Files app** (Samsung My Files included) and in every app's file
+  picker, with your whole backup in folders by type
+- **Open a file and it streams from Telegram** — only the bytes the app reads are fetched, so
+  videos start and seek instantly and nothing is copied onto the phone first
+- **Copy or share files into AirDrive** from any app; they join the normal backup queue and the
+  temporary copy is deleted once they are safely in Telegram
+- Thumbnails for photos and videos, and the Files app's search covers your whole backup
+
 ### Knowing what happened
 
 - **Backup timeline** — every run as a row: when, what triggered it, how long it took, what
@@ -292,6 +302,32 @@ before deciding. Uploads made before this feature existed are not listed — tho
 well still be in Telegram, but there is no record of where, and the screen says so rather
 than guessing.
 
+## 12b. Cloud drive: use your backup like a drive
+
+Settings → **Cloud drive** (and the Files app itself: open the menu, pick **AirDrive**).
+
+AirDrive registers as an Android *document provider*, the same mechanism Google Drive and
+OneDrive use, so it needs no extra permission and works with any app that opens files.
+
+- **Folders** — Photos, Videos, PDFs, Documents, Audio, Call recordings, Other files. Only files
+  that finished uploading are listed.
+- **Streaming** — opening a file reads it from Telegram in 2 MiB pieces and fetches the next piece
+  in the background, so playback does not stall and seeking is immediate. A file that is still on
+  the phone is opened from the phone instead (instant, offline).
+- **Freeing up space still works** — after *Storage cleanup* removes a local copy, the file is
+  still one tap away in the Files app, which is what makes the drive feel unlimited.
+- **Copy in** — drag, copy or "Save to" AirDrive from any app. The file is staged privately, added
+  to the backup queue (the normal rules apply: duplicates by fingerprint are skipped, the
+  destination and caption template are used) and the staged copy is removed after upload.
+- **Search** — type in the Files app search box while AirDrive is open.
+- **Streaming cache** — Telegram keeps a temporary local copy of what you stream. By default it
+  is deleted a minute after the last app closes the file (switch in Cloud drive settings).
+- **Safety** — the drive is read-only for files already in Telegram: there is no delete or
+  rename from the Files app, because deleting from Telegram is irreversible and AirDrive only
+  does that from **Deleted files**, after asking. While **App Lock** is on, the drive is hidden
+  entirely so the Files app cannot be used to get around the lock.
+- Streaming needs the Telegram session to be signed in and online.
+
 ## 13. Security
 
 - Your Telegram session lives only in AirDrive's private app storage (`filesDir/tdlib`),
@@ -371,6 +407,7 @@ AirDrive/
 │       ├── data/            # Room database, DataStore settings, repository
 │       ├── scanner/         # Whole-device + SAF file walk, categorization, fingerprints
 │       ├── telegram/        # TDLib client wrapper (login, chat resolution, upload)
+│       ├── drive/           # Cloud drive: Files-app provider, range streaming, copy-in staging
 │       ├── util/            # All-files-access helpers, scan roots
 │       ├── work/            # WorkManager background/foreground backup
 │       └── ui/              # Compose screens and navigation

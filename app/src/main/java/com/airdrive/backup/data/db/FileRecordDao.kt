@@ -113,4 +113,20 @@ interface FileRecordDao {
     @Query("SELECT * FROM file_records WHERE verifyState IN ('MISSING_REMOTE','SIZE_MISMATCH') ORDER BY verifiedAtMillis DESC, id DESC LIMIT :limit") fun verifyProblemsFlow(limit: Int): Flow<List<FileRecord>>
     @Query("SELECT COUNT(*) FROM file_records WHERE verifyState IN ('MISSING_REMOTE','SIZE_MISMATCH')") fun verifyProblemCountFlow(): Flow<Int>
     @Query("UPDATE file_records SET status = 'PENDING', telegramMessageId = NULL, uploadedAtMillis = NULL, retryCount = 0, lastError = NULL, verifyState = 'UNVERIFIED', verifiedAtMillis = NULL WHERE id = :id AND localState = 'PRESENT'") suspend fun requeueForRepair(id: Long): Int
+
+    // ------------------------------------------------------------------ cloud drive (DocumentsProvider)
+
+    /** Streamable files of one category, plus files copied in through the Files app that are still waiting to upload. */
+    @Query("SELECT * FROM file_records WHERE category = :category AND ((status = 'UPLOADED' AND telegramMessageId IS NOT NULL AND destinationChannelId != 0) OR (uri LIKE :inboxPrefix || '%' AND status IN ('PENDING','UPLOADING','FAILED'))) ORDER BY displayName COLLATE NOCASE ASC")
+    suspend fun cloudFilesInCategory(category: BackupCategory, inboxPrefix: String): List<FileRecord>
+
+    @Query("SELECT * FROM file_records WHERE id = :id LIMIT 1")
+    suspend fun cloudById(id: Long): FileRecord?
+
+    @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' AND telegramMessageId IS NOT NULL AND destinationChannelId != 0 AND displayName LIKE '%' || :query || '%' ORDER BY uploadedAtMillis DESC LIMIT :limit")
+    suspend fun cloudSearch(query: String, limit: Int): List<FileRecord>
+
+    /** Staged copy-in files whose upload has finished, so the staged copy can be deleted. */
+    @Query("SELECT * FROM file_records WHERE status = 'UPLOADED' AND uri LIKE :inboxPrefix || '%'")
+    suspend fun cloudInboxUploaded(inboxPrefix: String): List<FileRecord>
 }

@@ -2,5 +2,7 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="tdlib_session.xml" />
     <exclude domain="file" path="tdlib" />
+    <exclude domain="file" path="tdlib-files" />
+    <exclude domain="file" path="cloud-inbox" />
     <exclude domain="database" path="airdrive.db" />
 </full-backup-content>
